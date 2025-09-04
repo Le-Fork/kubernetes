@@ -12,10 +12,10 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - name: Check out repository
+      - name: Check out repository (shallow)
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0       # get full history for merging
+          fetch-depth: 1       # only latest commit
 
       - name: Configure Git
         run: |
