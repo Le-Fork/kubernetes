@@ -57,6 +57,9 @@ func testDeclarativeValidate(t *testing.T, apiVersion string) {
 	fakeClient := fake.NewClientset()
 	mockNSClient := fakeClient.CoreV1().Namespaces()
 	Strategy := NewStrategy(mockNSClient)
+
+	opaqueDriverPath := field.NewPath("spec", "devices", "config").Index(0).Child("opaque", "driver")
+
 	testCases := map[string]struct {
 		input        resource.ResourceClaim
 		expectedErrs field.ErrorList
@@ -137,6 +140,39 @@ func testDeclarativeValidate(t *testing.T, apiVersion string) {
 		},
 		"valid config requests, max allowed": {
 			input: mkValidResourceClaim(tweakConfigRequests(32)),
+		},
+		"valid opaque driver, lowercase": {
+			input: mkValidResourceClaim(tweakDeviceConfigWithDriver("dra.example.com")),
+		},
+		"valid opaque driver, mixed case": {
+			input: mkValidResourceClaim(tweakDeviceConfigWithDriver("DRA.Example.COM")),
+		},
+		"valid opaque driver, max length": {
+			input: mkValidResourceClaim(tweakDeviceConfigWithDriver(strings.Repeat("a", 63))),
+		},
+		"invalid opaque driver, empty": {
+			input: mkValidResourceClaim(tweakDeviceConfigWithDriver("")),
+			expectedErrs: field.ErrorList{
+				field.Required(opaqueDriverPath, ""),
+			},
+		},
+		"invalid opaque driver, too long": {
+			input: mkValidResourceClaim(tweakDeviceConfigWithDriver(strings.Repeat("a", 64))),
+			expectedErrs: field.ErrorList{
+				field.TooLong(opaqueDriverPath, "", 63),
+			},
+		},
+		"invalid opaque driver, invalid character": {
+			input: mkValidResourceClaim(tweakDeviceConfigWithDriver("dra_example.com")),
+			expectedErrs: field.ErrorList{
+				field.Invalid(opaqueDriverPath, "dra_example.com", "").WithOrigin("format=k8s-long-name-caseless"),
+			},
+		},
+		"invalid opaque driver, invalid DNS name (leading dot)": {
+			input: mkValidResourceClaim(tweakDeviceConfigWithDriver(".example.com")),
+			expectedErrs: field.ErrorList{
+				field.Invalid(opaqueDriverPath, ".example.com", "").WithOrigin("format=k8s-long-name-caseless"),
+			},
 		},
 		// TODO: Add more test cases
 	}
@@ -305,6 +341,41 @@ func testDeclarativeValidateUpdate(t *testing.T, apiVersion string) {
 		"valid": {
 			update: validClaim,
 			old:    validClaim,
+		},
+		"spec immutable: modify request class name": {
+			update: mkValidResourceClaim(tweakSpecChangeClassName("another-class")),
+			old:    validClaim,
+			expectedErrs: field.ErrorList{
+				field.Invalid(field.NewPath("spec"), "field is immutable", "").WithOrigin("immutable"),
+			},
+		},
+		"spec immutable: add request": {
+			update: mkValidResourceClaim(tweakSpecAddRequest(mkDeviceRequest("req-1"))),
+			old:    validClaim,
+			expectedErrs: field.ErrorList{
+				field.Invalid(field.NewPath("spec"), "field is immutable", "").WithOrigin("immutable"),
+			},
+		},
+		"spec immutable: remove request": {
+			update: mkValidResourceClaim(tweakSpecRemoveRequest(0)),
+			old:    validClaim,
+			expectedErrs: field.ErrorList{
+				field.Invalid(field.NewPath("spec"), "field is immutable", "").WithOrigin("immutable"),
+			},
+		},
+		"spec immutable: add constraint": {
+			update: mkValidResourceClaim(tweakSpecAddConstraint(mkDeviceConstraint())),
+			old:    validClaim,
+			expectedErrs: field.ErrorList{
+				field.Invalid(field.NewPath("spec"), "field is immutable", "").WithOrigin("immutable"),
+			},
+		},
+		"spec immutable: short-circuits other errors (e.g. TooMany)": {
+			update: mkValidResourceClaim(tweakDevicesRequests(33)),
+			old:    mkValidResourceClaim(),
+			expectedErrs: field.ErrorList{
+				field.Invalid(field.NewPath("spec"), "field is immutable", "").WithOrigin("immutable"),
+			},
 		},
 		// TODO: Add more test cases
 	}
@@ -565,10 +636,32 @@ func tweakStatusDeviceRequestAllocationResultShareID(shareID types.UID) func(rc 
 	}
 }
 
+func tweakSpecChangeClassName(deviceClassName string) func(rc *resource.ResourceClaim) {
+	return func(rc *resource.ResourceClaim) {
+		if len(rc.Spec.Devices.Requests) > 0 && rc.Spec.Devices.Requests[0].Exactly != nil {
+			rc.Spec.Devices.Requests[0].Exactly.DeviceClassName = deviceClassName
+		}
+	}
+}
+
 func tweakStatusAllocatedDeviceStatusShareID(shareID string) func(rc *resource.ResourceClaim) {
 	return func(rc *resource.ResourceClaim) {
 		for i := range rc.Status.Devices {
 			rc.Status.Devices[i].ShareID = &shareID
+		}
+	}
+}
+
+func tweakSpecAddRequest(req resource.DeviceRequest) func(rc *resource.ResourceClaim) {
+	return func(rc *resource.ResourceClaim) {
+		rc.Spec.Devices.Requests = append(rc.Spec.Devices.Requests, req)
+	}
+}
+
+func tweakSpecRemoveRequest(index int) func(rc *resource.ResourceClaim) {
+	return func(rc *resource.ResourceClaim) {
+		if index >= 0 && index < len(rc.Spec.Devices.Requests) {
+			rc.Spec.Devices.Requests = append(rc.Spec.Devices.Requests[:index], rc.Spec.Devices.Requests[index+1:]...)
 		}
 	}
 }
@@ -592,5 +685,27 @@ func resourceClaimReference(uid string) resource.ResourceClaimConsumerReference 
 func tweakStatusReservedFor(refs ...resource.ResourceClaimConsumerReference) func(rc *resource.ResourceClaim) {
 	return func(rc *resource.ResourceClaim) {
 		rc.Status.ReservedFor = refs
+	}
+}
+
+func tweakSpecAddConstraint(c resource.DeviceConstraint) func(rc *resource.ResourceClaim) {
+	return func(rc *resource.ResourceClaim) {
+		rc.Spec.Devices.Constraints = append(rc.Spec.Devices.Constraints, c)
+	}
+}
+
+func tweakDeviceConfigWithDriver(driverName string) func(rc *resource.ResourceClaim) {
+	return func(rc *resource.ResourceClaim) {
+		rc.Spec.Devices.Config = []resource.DeviceClaimConfiguration{
+			{
+				Requests: []string{"req-0"},
+				DeviceConfiguration: resource.DeviceConfiguration{
+					Opaque: &resource.OpaqueDeviceConfiguration{
+						Driver:     driverName,
+						Parameters: runtime.RawExtension{Raw: []byte(`{"key":"value"}`)},
+					},
+				},
+			},
+		}
 	}
 }
