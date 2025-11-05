@@ -59,6 +59,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/apiserver/pkg/server/flagz"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	coreinformersv1 "k8s.io/client-go/informers/core/v1"
 	clientset "k8s.io/client-go/kubernetes"
@@ -69,7 +70,6 @@ import (
 	"k8s.io/client-go/util/certificate"
 	"k8s.io/client-go/util/flowcontrol"
 	cloudprovider "k8s.io/cloud-provider"
-	"k8s.io/component-base/zpages/flagz"
 	"k8s.io/component-helpers/apimachinery/lease"
 	resourcehelper "k8s.io/component-helpers/resource"
 	internalapi "k8s.io/cri-api/pkg/apis"
@@ -952,7 +952,7 @@ func NewMainKubelet(ctx context.Context,
 		podCertificateManager := podcertificate.NewIssuingManager(
 			kubeDeps.KubeClient,
 			klet.podManager,
-			kubeInformers.Certificates().V1alpha1().PodCertificateRequests(),
+			kubeInformers.Certificates().V1beta1().PodCertificateRequests(),
 			nodeInformer,
 			nodeName,
 			clock.RealClock{},
@@ -1034,7 +1034,7 @@ func NewMainKubelet(ctx context.Context,
 	handlers = append(handlers, klet.containerManager.GetAllocateResourcesPodAdmitHandler())
 
 	criticalPodAdmissionHandler := preemption.NewCriticalPodAdmissionHandler(klet.getAllocatedPods, killPodNow(klet.podWorkers, kubeDeps.Recorder), kubeDeps.Recorder)
-	handlers = append(handlers, lifecycle.NewPredicateAdmitHandler(klet.getNodeAnyWay, criticalPodAdmissionHandler, klet.containerManager.UpdatePluginResources))
+	handlers = append(handlers, lifecycle.NewPredicateAdmitHandler(klet.GetCachedNode, criticalPodAdmissionHandler, klet.containerManager.UpdatePluginResources))
 	// apply functional Option's
 	for _, opt := range kubeDeps.Options {
 		opt(klet)
@@ -1111,6 +1111,7 @@ type Kubelet struct {
 	hostname string
 
 	nodeName        types.NodeName
+	cachedNode      *v1.Node
 	runtimeCache    kubecontainer.RuntimeCache
 	kubeClient      clientset.Interface
 	heartbeatClient clientset.Interface

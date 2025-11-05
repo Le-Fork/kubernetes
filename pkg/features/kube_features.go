@@ -990,17 +990,6 @@ const (
 	// Proxies client to an apiserver capable of serving the request in the event of version skew.
 	UnknownVersionInteroperabilityProxy featuregate.Feature = "UnknownVersionInteroperabilityProxy"
 
-	// owner: @saschagrunert
-	//
-	// Enables user namespace support for Pod Security Standards. Enabling this
-	// feature will modify all Pod Security Standard rules to allow setting:
-	// spec[.*].securityContext.[runAsNonRoot,runAsUser]
-	// This feature gate should only be enabled if all nodes in the cluster
-	// support the user namespace feature and have it enabled. The feature gate
-	// will not graduate or be enabled by default in future Kubernetes
-	// releases.
-	UserNamespacesPodSecurityStandards featuregate.Feature = "UserNamespacesPodSecurityStandards"
-
 	// owner: @rata, @giuseppe
 	// kep: https://kep.k8s.io/127
 	//
@@ -1312,6 +1301,7 @@ var defaultVersionedKubernetesFeatureGates = map[featuregate.Feature]featuregate
 	JobManagedBy: {
 		{Version: version.MustParse("1.30"), Default: false, PreRelease: featuregate.Alpha},
 		{Version: version.MustParse("1.32"), Default: true, PreRelease: featuregate.Beta},
+		{Version: version.MustParse("1.35"), Default: true, PreRelease: featuregate.GA, LockToDefault: true}, // remove in 1.38
 	},
 
 	JobPodReplacementPolicy: {
@@ -1484,6 +1474,7 @@ var defaultVersionedKubernetesFeatureGates = map[featuregate.Feature]featuregate
 
 	PodCertificateRequest: {
 		{Version: version.MustParse("1.34"), Default: false, PreRelease: featuregate.Alpha},
+		{Version: version.MustParse("1.35"), Default: false, PreRelease: featuregate.Beta},
 	},
 
 	PodDeletionCost: {
@@ -1626,6 +1617,7 @@ var defaultVersionedKubernetesFeatureGates = map[featuregate.Feature]featuregate
 
 	SchedulerAsyncAPICalls: {
 		{Version: version.MustParse("1.34"), Default: false, PreRelease: featuregate.Beta},
+		{Version: version.MustParse("1.35"), Default: true, PreRelease: featuregate.Beta},
 	},
 
 	SchedulerAsyncPreemption: {
@@ -1764,10 +1756,6 @@ var defaultVersionedKubernetesFeatureGates = map[featuregate.Feature]featuregate
 		{Version: version.MustParse("1.28"), Default: false, PreRelease: featuregate.Alpha},
 	},
 
-	UserNamespacesPodSecurityStandards: {
-		{Version: version.MustParse("1.29"), Default: false, PreRelease: featuregate.Alpha},
-	},
-
 	UserNamespacesSupport: {
 		{Version: version.MustParse("1.25"), Default: false, PreRelease: featuregate.Alpha},
 		{Version: version.MustParse("1.30"), Default: false, PreRelease: featuregate.Beta},
@@ -1884,6 +1872,10 @@ var defaultVersionedKubernetesFeatureGates = map[featuregate.Feature]featuregate
 		{Version: version.MustParse("1.28"), Default: false, PreRelease: featuregate.Alpha},
 		{Version: version.MustParse("1.31"), Default: true, PreRelease: featuregate.Beta},
 		{Version: version.MustParse("1.34"), Default: true, PreRelease: featuregate.GA, LockToDefault: true},
+	},
+
+	genericfeatures.ConstrainedImpersonation: {
+		{Version: version.MustParse("1.35"), Default: false, PreRelease: featuregate.Alpha},
 	},
 
 	genericfeatures.CoordinatedLeaderElection: {
@@ -2308,8 +2300,6 @@ var defaultKubernetesFeatureGateDependencies = map[featuregate.Feature][]feature
 
 	UnknownVersionInteroperabilityProxy: {},
 
-	UserNamespacesPodSecurityStandards: {},
-
 	UserNamespacesSupport: {},
 
 	VolumeAttributesClass: {},
@@ -2355,6 +2345,8 @@ var defaultKubernetesFeatureGateDependencies = map[featuregate.Feature][]feature
 	genericfeatures.ConcurrentWatchObjectDecode: {},
 
 	genericfeatures.ConsistentListFromCache: {},
+
+	genericfeatures.ConstrainedImpersonation: {},
 
 	genericfeatures.DeclarativeValidation: {},
 
