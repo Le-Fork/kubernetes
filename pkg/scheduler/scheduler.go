@@ -51,6 +51,7 @@ import (
 	frameworkplugins "k8s.io/kubernetes/pkg/scheduler/framework/plugins"
 	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/dynamicresources"
 	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/noderesources"
+	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/nodevolumelimits"
 	frameworkruntime "k8s.io/kubernetes/pkg/scheduler/framework/runtime"
 	"k8s.io/kubernetes/pkg/scheduler/metrics"
 	"k8s.io/kubernetes/pkg/scheduler/profile"
@@ -326,14 +327,14 @@ func New(ctx context.Context,
 		resourceClaimInformer := informerFactory.Resource().V1().ResourceClaims().Informer()
 		resourceClaimCache = assumecache.NewAssumeCache(logger, resourceClaimInformer, "ResourceClaim", "", nil)
 		resourceSliceTrackerOpts := resourceslicetracker.Options{
-			EnableDeviceTaints:       feature.DefaultFeatureGate.Enabled(features.DRADeviceTaints),
+			EnableDeviceTaintRules:   feature.DefaultFeatureGate.Enabled(features.DRADeviceTaintRules),
 			EnableConsumableCapacity: feature.DefaultFeatureGate.Enabled(features.DRAConsumableCapacity),
 			SliceInformer:            informerFactory.Resource().V1().ResourceSlices(),
 			KubeClient:               client,
 		}
-		// If device taints are disabled, the additional informers are not needed and
+		// If device taint rules are disabled, the additional informers are not needed and
 		// the tracker turns into a simple wrapper around the slice informer.
-		if resourceSliceTrackerOpts.EnableDeviceTaints {
+		if resourceSliceTrackerOpts.EnableDeviceTaintRules {
 			resourceSliceTrackerOpts.TaintInformer = informerFactory.Resource().V1alpha3().DeviceTaintRules()
 			resourceSliceTrackerOpts.ClassInformer = informerFactory.Resource().V1().DeviceClasses()
 		}
@@ -343,6 +344,8 @@ func New(ctx context.Context,
 		}
 		draManager = dynamicresources.NewDRAManager(ctx, resourceClaimCache, resourceSliceTracker, informerFactory)
 	}
+	sharedCSIManager := nodevolumelimits.NewCSIManager(informerFactory.Storage().V1().CSINodes().Lister())
+
 	var apiDispatcher *apidispatcher.APIDispatcher
 	if feature.DefaultFeatureGate.Enabled(features.SchedulerAsyncAPICalls) {
 		apiDispatcher = apidispatcher.New(client, int(options.parallelism), apicalls.Relevances)
@@ -361,6 +364,7 @@ func New(ctx context.Context,
 		frameworkruntime.WithMetricsRecorder(metricsRecorder),
 		frameworkruntime.WithWaitingPods(waitingPods),
 		frameworkruntime.WithAPIDispatcher(apiDispatcher),
+		frameworkruntime.WithSharedCSIManager(sharedCSIManager),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("initializing profiles: %v", err)

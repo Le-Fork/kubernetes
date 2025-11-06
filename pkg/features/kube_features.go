@@ -128,6 +128,11 @@ const (
 	// Enables kubelet to detect CSI volume condition and send the event of the abnormal volume to the corresponding pod that is using it.
 	CSIVolumeHealth featuregate.Feature = "CSIVolumeHealth"
 
+	// owner: @HirazawaUi
+	//
+	// Enabling this feature gate will cause the pod's status to change due to a kubelet restart.
+	ChangeContainerStatusOnKubeletRestart = "ChangeContainerStatusOnKubeletRestart"
+
 	// owner: @sanposhiho @wojtek-t
 	// kep: https://kep.k8s.io/5278
 	//
@@ -199,6 +204,12 @@ const (
 	// DRAResourceClaimDeviceStatus also needs to be
 	// enabled.
 	DRADeviceBindingConditions featuregate.Feature = "DRADeviceBindingConditions"
+
+	// owner: @pohly
+	// kep: http://kep.k8s.io/5055
+	//
+	// DeviceTaintRules allow administrators to add taints to devices.
+	DRADeviceTaintRules featuregate.Feature = "DRADeviceTaintRules"
 
 	// owner: @pohly
 	// kep: http://kep.k8s.io/5055
@@ -584,6 +595,12 @@ const (
 	// Makes CSINode.Spec.Drivers[*].Allocatable.Count mutable, allowing CSI drivers to
 	// update the number of volumes that can be allocated on a node
 	MutableCSINodeAllocatableCount featuregate.Feature = "MutableCSINodeAllocatableCount"
+
+	// owner: @kannon92
+	// kep: https://kep.k8s.io/5440
+	//
+	// Enables mutable pod resources for suspended Jobs, regardless of whether they have started before.
+	MutablePodResourcesForSuspendedJobs featuregate.Feature = "MutablePodResourcesForSuspendedJobs"
 
 	// owner: @danwinship
 	// kep: https://kep.k8s.io/3866
@@ -1002,6 +1019,13 @@ const (
 	// Enables user specified volume attributes for persistent volumes, like iops and throughput.
 	VolumeAttributesClass featuregate.Feature = "VolumeAttributesClass"
 
+	// owner: @gnufied
+	// kep: https://kep.k8s.io/5030
+	//
+	// Enables volume limit scaling for CSI drivers. This allows scheduler to
+	// co-ordinate better with cluster-autoscaler for storage limits.
+	VolumeLimitScaling featuregate.Feature = "VolumeLimitScaling"
+
 	// owner: @ksubrmnn
 	//
 	// Allows kube-proxy to create DSR loadbalancers for Windows
@@ -1107,6 +1131,11 @@ var defaultVersionedKubernetesFeatureGates = map[featuregate.Feature]featuregate
 		{Version: version.MustParse("1.21"), Default: false, PreRelease: featuregate.Alpha},
 	},
 
+	ChangeContainerStatusOnKubeletRestart: {
+		{Version: version.MustParse("1.0"), Default: true, PreRelease: featuregate.GA},
+		{Version: version.MustParse("1.35"), Default: false, PreRelease: featuregate.Deprecated},
+	},
+
 	ClearingNominatedNodeNameAfterBinding: {
 		{Version: version.MustParse("1.34"), Default: false, PreRelease: featuregate.Alpha},
 	},
@@ -1150,6 +1179,10 @@ var defaultVersionedKubernetesFeatureGates = map[featuregate.Feature]featuregate
 
 	DRADeviceBindingConditions: {
 		{Version: version.MustParse("1.34"), Default: false, PreRelease: featuregate.Alpha},
+	},
+
+	DRADeviceTaintRules: {
+		{Version: version.MustParse("1.35"), Default: false, PreRelease: featuregate.Alpha},
 	},
 
 	DRADeviceTaints: {
@@ -1432,6 +1465,10 @@ var defaultVersionedKubernetesFeatureGates = map[featuregate.Feature]featuregate
 		{Version: version.MustParse("1.33"), Default: false, PreRelease: featuregate.Alpha},
 		{Version: version.MustParse("1.34"), Default: false, PreRelease: featuregate.Beta},
 		{Version: version.MustParse("1.35"), Default: true, PreRelease: featuregate.Beta},
+	},
+
+	MutablePodResourcesForSuspendedJobs: {
+		{Version: version.MustParse("1.35"), Default: false, PreRelease: featuregate.Alpha},
 	},
 
 	NFTablesProxyMode: {
@@ -1718,6 +1755,7 @@ var defaultVersionedKubernetesFeatureGates = map[featuregate.Feature]featuregate
 	SupplementalGroupsPolicy: {
 		{Version: version.MustParse("1.31"), Default: false, PreRelease: featuregate.Alpha},
 		{Version: version.MustParse("1.33"), Default: true, PreRelease: featuregate.Beta},
+		{Version: version.MustParse("1.35"), Default: true, PreRelease: featuregate.GA, LockToDefault: true}, // remove in 1.38
 	},
 
 	SystemdWatchdog: {
@@ -1766,6 +1804,10 @@ var defaultVersionedKubernetesFeatureGates = map[featuregate.Feature]featuregate
 		{Version: version.MustParse("1.29"), Default: false, PreRelease: featuregate.Alpha},
 		{Version: version.MustParse("1.31"), Default: false, PreRelease: featuregate.Beta},
 		{Version: version.MustParse("1.34"), Default: true, PreRelease: featuregate.GA},
+	},
+
+	VolumeLimitScaling: {
+		{Version: version.MustParse("1.35"), Default: false, PreRelease: featuregate.Alpha},
 	},
 
 	WinDSR: {
@@ -1833,6 +1875,7 @@ var defaultVersionedKubernetesFeatureGates = map[featuregate.Feature]featuregate
 	genericfeatures.AggregatedDiscoveryRemoveBetaType: {
 		{Version: version.MustParse("1.0"), Default: false, PreRelease: featuregate.GA},
 		{Version: version.MustParse("1.33"), Default: true, PreRelease: featuregate.Deprecated},
+		{Version: version.MustParse("1.35"), Default: true, PreRelease: featuregate.Deprecated, LockToDefault: true},
 	},
 
 	genericfeatures.AllowParsingUserUIDFromCertAuth: {
@@ -2042,6 +2085,8 @@ var defaultKubernetesFeatureGateDependencies = map[featuregate.Feature][]feature
 
 	CSIVolumeHealth: {},
 
+	ChangeContainerStatusOnKubeletRestart: {},
+
 	ClearingNominatedNodeNameAfterBinding: {},
 
 	ClusterTrustBundle: {},
@@ -2063,6 +2108,8 @@ var defaultKubernetesFeatureGateDependencies = map[featuregate.Feature][]feature
 	DRAConsumableCapacity: {DynamicResourceAllocation},
 
 	DRADeviceBindingConditions: {DynamicResourceAllocation, DRAResourceClaimDeviceStatus},
+
+	DRADeviceTaintRules: {DRADeviceTaints}, // DynamicResourceAllocation is indirect.
 
 	DRADeviceTaints: {DynamicResourceAllocation},
 
@@ -2175,6 +2222,8 @@ var defaultKubernetesFeatureGateDependencies = map[featuregate.Feature][]feature
 	MultiCIDRServiceAllocator: {},
 
 	MutableCSINodeAllocatableCount: {},
+
+	MutablePodResourcesForSuspendedJobs: {},
 
 	NFTablesProxyMode: {},
 
@@ -2303,6 +2352,8 @@ var defaultKubernetesFeatureGateDependencies = map[featuregate.Feature][]feature
 	UserNamespacesSupport: {},
 
 	VolumeAttributesClass: {},
+
+	VolumeLimitScaling: {},
 
 	WinDSR: {},
 
