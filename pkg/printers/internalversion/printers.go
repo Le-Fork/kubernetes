@@ -67,6 +67,7 @@ import (
 	"k8s.io/kubernetes/pkg/apis/flowcontrol"
 	apihelpers "k8s.io/kubernetes/pkg/apis/flowcontrol/util"
 	"k8s.io/kubernetes/pkg/apis/networking"
+	networkingutil "k8s.io/kubernetes/pkg/apis/networking/util"
 	nodeapi "k8s.io/kubernetes/pkg/apis/node"
 	"k8s.io/kubernetes/pkg/apis/policy"
 	"k8s.io/kubernetes/pkg/apis/rbac"
@@ -1502,6 +1503,11 @@ func printIngressClass(obj *networking.IngressClass, options printers.GenerateOp
 	row := metav1.TableRow{
 		Object: runtime.RawExtension{Object: obj},
 	}
+
+	name := obj.Name
+	if networkingutil.HasDefaultAnnotation(obj.ObjectMeta) {
+		name += " (default)"
+	}
 	parameters := "<none>"
 	if obj.Spec.Parameters != nil {
 		parameters = obj.Spec.Parameters.Kind
@@ -1511,7 +1517,7 @@ func printIngressClass(obj *networking.IngressClass, options printers.GenerateOp
 		parameters = parameters + "/" + obj.Spec.Parameters.Name
 	}
 	createTime := translateTimestampSince(obj.CreationTimestamp)
-	row.Cells = append(row.Cells, obj.Name, obj.Spec.Controller, parameters, createTime)
+	row.Cells = append(row.Cells, name, obj.Spec.Controller, parameters, createTime)
 	return []metav1.TableRow{row}, nil
 }
 
@@ -1989,6 +1995,10 @@ func printNode(obj *api.Node, options printers.GenerateOptions) ([]metav1.TableR
 		}
 		if crVersion == "" {
 			crVersion = "<unknown>"
+		}
+		// append arch to kernelVersion
+		if obj.Status.NodeInfo.Architecture != "" {
+			kernelVersion += " (" + obj.Status.NodeInfo.Architecture + ")"
 		}
 		row.Cells = append(row.Cells, getNodeInternalIP(obj), getNodeExternalIP(obj), osImage, kernelVersion, crVersion)
 	}
