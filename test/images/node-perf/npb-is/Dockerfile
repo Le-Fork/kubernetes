@@ -20,9 +20,14 @@ CROSS_BUILD_COPY qemu-QEMUARCH-static /usr/bin/
 RUN apt-get update && apt-get install -y build-essential gfortran
 
 ADD http://www.nas.nasa.gov/assets/npb/NPB3.3.1.tar.gz .
-RUN tar xzf NPB3.3.1.tar.gz
+# Fix permissions for cross-build with QEMU emulation
+RUN tar xzf NPB3.3.1.tar.gz && chmod -R a+rX NPB3.3.1
 
 WORKDIR ./NPB3.3.1/NPB3.3-OMP
+
+# Add missing shebangs to shell scripts - required for cross-build with QEMU emulation
+# Without shebangs, dash (default /bin/sh on Debian) fails to execute these scripts via make
+RUN sed -i '1i#!/bin/sh' sys/print_header sys/print_instructions
 
 # Create build config based on the architecture and build the workload.
 RUN if [ $(arch) != "x86_64" ]; then \
