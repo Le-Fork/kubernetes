@@ -482,7 +482,7 @@ func (m *kubeGenericRuntimeManager) getPods(ctx context.Context, opts listOption
 		return nil, err
 	}
 	// Sort sandboxes by creation time, newest first.
-	sort.Sort(podSandboxByCreated(sandboxes))
+	sort.Sort(podSandboxByCreatedThenID(sandboxes))
 	for i := range sandboxes {
 		s := sandboxes[i]
 		if s.Metadata == nil {
@@ -511,6 +511,13 @@ func (m *kubeGenericRuntimeManager) getPods(ctx context.Context, opts listOption
 	if err != nil {
 		return nil, err
 	}
+	// Sort containers: newest CreatedAt first, then by container ID for stability.
+	// There are scenarios where multiple pods are running in parallel having
+	// the same name, because one of them have not been fully terminated yet.
+	// To avoid unexpected behavior on container name based search (for example
+	// by calling *Kubelet.findContainer() without specifying a pod ID), we
+	// return the list of pods ordered by their creation time.
+	sort.Sort(containerByCreatedThenID(containers))
 	for i := range containers {
 		c := containers[i]
 		if c.Metadata == nil {
@@ -1628,20 +1635,17 @@ func (m *kubeGenericRuntimeManager) SyncPod(ctx context.Context, pod *v1.Pod, po
 	}
 
 	// Get podSandboxConfig for containers to start.
-	configPodSandboxResult := kubecontainer.NewSyncResult(kubecontainer.ConfigPodSandbox, podSandboxID)
-	result.AddSyncResult(configPodSandboxResult)
 	podSandboxConfig, err := m.generatePodSandboxConfig(ctx, pod, podContainerChanges.Attempt)
 	if err != nil {
-		message := fmt.Sprintf("GeneratePodSandboxConfig for pod %q failed: %v", format.Pod(pod), err)
 		logger.Error(err, "GeneratePodSandboxConfig for pod failed", "pod", klog.KObj(pod))
-		configPodSandboxResult.Fail(kubecontainer.ErrConfigPodSandbox, message)
+		result.Fail(fmt.Errorf("GeneratePodSandboxConfig for pod %q failed: %w", format.Pod(pod), err))
 		return
 	}
 
 	imageVolumePullResults, err := m.getImageVolumes(ctx, pod, podSandboxConfig, pullSecrets)
 	if err != nil {
 		logger.Error(err, "Get image volumes for pod failed", "pod", klog.KObj(pod))
-		configPodSandboxResult.Fail(kubecontainer.ErrConfigPodSandbox, err.Error())
+		result.Fail(err)
 		return
 	}
 
@@ -1749,7 +1753,7 @@ func (m *kubeGenericRuntimeManager) SyncPod(ctx context.Context, pod *v1.Pod, po
 	// Step 7: For containers in podContainerChanges.ContainersToUpdate[CPU,Memory] list, invoke UpdateContainerResources
 	if resizable, _, _ := allocation.IsInPlacePodVerticalScalingAllowed(pod); resizable {
 		if len(podContainerChanges.ContainersToUpdate) > 0 || podContainerChanges.UpdatePodResources || podContainerChanges.UpdatePodLevelResources {
-			result.SyncResults = append(result.SyncResults, m.doPodResizeAction(ctx, pod, podStatus, podContainerChanges))
+			result.AddSyncResult(m.doPodResizeAction(ctx, pod, podStatus, podContainerChanges))
 		}
 	}
 
@@ -1758,7 +1762,7 @@ func (m *kubeGenericRuntimeManager) SyncPod(ctx context.Context, pod *v1.Pod, po
 		start(ctx, "container", metrics.Container, containerStartSpec(&pod.Spec.Containers[idx]))
 	}
 
-	return
+	return result
 }
 
 // incrementImageVolumeMetrics increments the image volume mount metrics
