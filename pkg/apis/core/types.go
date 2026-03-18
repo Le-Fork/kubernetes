@@ -3204,7 +3204,7 @@ type VolumeMountStatus struct {
 	// volumeStatus represents volume-type-specific status about the mounted
 	// volume.
 	// +optional
-	VolumeStatus
+	VolumeStatus *VolumeStatus
 }
 
 // VolumeStatus represents the status of a mounted volume.
@@ -5120,6 +5120,8 @@ type ServiceSpec struct {
 
 	// ExternalIPs are used by external load balancers, or can be set by
 	// users to handle external traffic that arrives at a node.
+	//
+	// Deprecated: ExternalIPs is deprecated and may be removed in a future version.
 	// +optional
 	ExternalIPs []string
 

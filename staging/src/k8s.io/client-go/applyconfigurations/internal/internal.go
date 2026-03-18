@@ -8423,7 +8423,6 @@ var schemaYAML = typed.YAMLObject(`types:
     - name: volumeStatus
       type:
         namedType: io.k8s.api.core.v1.VolumeStatus
-      default: {}
 - name: io.k8s.api.core.v1.VolumeNodeAffinity
   map:
     fields:
@@ -14526,6 +14525,15 @@ var schemaYAML = typed.YAMLObject(`types:
       type:
         namedType: io.k8s.api.scheduling.v1alpha2.PodGroupStatus
       default: {}
+- name: io.k8s.api.scheduling.v1alpha2.PodGroupSchedulingConstraints
+  map:
+    fields:
+    - name: topology
+      type:
+        list:
+          elementType:
+            namedType: io.k8s.api.scheduling.v1alpha2.TopologyConstraint
+          elementRelationship: atomic
 - name: io.k8s.api.scheduling.v1alpha2.PodGroupSchedulingPolicy
   map:
     fields:
@@ -14547,6 +14555,9 @@ var schemaYAML = typed.YAMLObject(`types:
     - name: podGroupTemplateRef
       type:
         namedType: io.k8s.api.scheduling.v1alpha2.PodGroupTemplateReference
+    - name: schedulingConstraints
+      type:
+        namedType: io.k8s.api.scheduling.v1alpha2.PodGroupSchedulingConstraints
     - name: schedulingPolicy
       type:
         namedType: io.k8s.api.scheduling.v1alpha2.PodGroupSchedulingPolicy
@@ -14569,6 +14580,9 @@ var schemaYAML = typed.YAMLObject(`types:
       type:
         scalar: string
       default: ""
+    - name: schedulingConstraints
+      type:
+        namedType: io.k8s.api.scheduling.v1alpha2.PodGroupSchedulingConstraints
     - name: schedulingPolicy
       type:
         namedType: io.k8s.api.scheduling.v1alpha2.PodGroupSchedulingPolicy
@@ -14583,6 +14597,13 @@ var schemaYAML = typed.YAMLObject(`types:
     - fields:
       - fieldName: workload
         discriminatorValue: Workload
+- name: io.k8s.api.scheduling.v1alpha2.TopologyConstraint
+  map:
+    fields:
+    - name: key
+      type:
+        scalar: string
+      default: ""
 - name: io.k8s.api.scheduling.v1alpha2.TypedLocalObjectReference
   map:
     fields:
