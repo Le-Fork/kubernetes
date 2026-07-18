@@ -46,6 +46,8 @@ import (
 	clienttesting "k8s.io/client-go/testing"
 	"k8s.io/client-go/tools/events"
 	featuregatetesting "k8s.io/component-base/featuregate/testing"
+	componentmetrics "k8s.io/component-base/metrics"
+	"k8s.io/component-base/metrics/testutil"
 	corev1helpers "k8s.io/component-helpers/scheduling/corev1"
 	"k8s.io/klog/v2"
 	"k8s.io/klog/v2/ktesting"
@@ -396,60 +398,6 @@ func TestPostFilter(t *testing.T) {
 			}, fwk.NewStatus(fwk.UnschedulableAndUnresolvable)),
 			wantResult: framework.NewPostFilterResultWithNominatedNode("node2"),
 			wantStatus: fwk.NewStatus(fwk.Success, "preemption: found a potential placement for pod on node node2, preempting 1 victims"),
-		},
-		{
-			name: "pod with SchedulingGroup with TAS with scheduling constraint enabled should not preempt",
-			pod:  st.MakePod().Name("p-with-podgroup").Namespace(v1.NamespaceDefault).PodGroupName("foo").Priority(highPriority).Obj(),
-			pods: []*v1.Pod{
-				st.MakePod().Name("p1").UID("p1").Namespace(v1.NamespaceDefault).Node("node1").Obj(),
-			},
-			nodes: []*v1.Node{
-				st.MakeNode().Name("node1").Capacity(onePodRes).Obj(),
-			},
-			podGroups: []*v1alpha3.PodGroup{
-				st.MakePodGroup().Name("foo").Namespace(v1.NamespaceDefault).TopologyKey("rack").Obj(),
-			},
-			filteredNodesStatuses: framework.NewNodeToStatus(map[string]*fwk.Status{
-				"node1": fwk.NewStatus(fwk.Unschedulable),
-			}, fwk.NewStatus(fwk.UnschedulableAndUnresolvable)),
-			features:   feature.Features{EnableGenericWorkload: true, EnableTopologyAwareWorkloadScheduling: true},
-			wantResult: nil,
-			wantStatus: fwk.NewStatus(fwk.Unschedulable, "preemption: not eligible due to workload aware preemption enabled"),
-		},
-		{
-			name: "pod with SchedulingGroup with TAS without scheduling constraint enabled should not preempt",
-			pod:  st.MakePod().Name("p-with-podgroup").Namespace(v1.NamespaceDefault).PodGroupName("foo").Priority(highPriority).Obj(),
-			pods: []*v1.Pod{
-				st.MakePod().Name("p1").UID("p1").Namespace(v1.NamespaceDefault).Node("node1").Obj(),
-			},
-			nodes: []*v1.Node{
-				st.MakeNode().Name("node1").Capacity(onePodRes).Obj(),
-			},
-			podGroups: []*v1alpha3.PodGroup{
-				st.MakePodGroup().Name("foo").Namespace(v1.NamespaceDefault).Obj(),
-			},
-			filteredNodesStatuses: framework.NewNodeToStatus(map[string]*fwk.Status{
-				"node1": fwk.NewStatus(fwk.Unschedulable),
-			}, fwk.NewStatus(fwk.UnschedulableAndUnresolvable)),
-			features:   feature.Features{EnableGenericWorkload: true, EnableTopologyAwareWorkloadScheduling: true},
-			wantResult: nil,
-			wantStatus: fwk.NewStatus(fwk.Unschedulable, "preemption: not eligible due to workload aware preemption enabled"),
-		},
-		{
-			name: "pod with SchedulingGroup should not preempt",
-			pod:  st.MakePod().Name("p-with-podgroup").PodGroupName("foo").Priority(highPriority).Obj(),
-			pods: []*v1.Pod{
-				st.MakePod().Name("p1").UID("p1").Namespace(v1.NamespaceDefault).Node("node1").Obj(),
-			},
-			nodes: []*v1.Node{
-				st.MakeNode().Name("node1").Capacity(onePodRes).Obj(),
-			},
-			filteredNodesStatuses: framework.NewNodeToStatus(map[string]*fwk.Status{
-				"node1": fwk.NewStatus(fwk.Unschedulable),
-			}, fwk.NewStatus(fwk.UnschedulableAndUnresolvable)),
-			features:   feature.Features{EnableGenericWorkload: true},
-			wantResult: nil,
-			wantStatus: fwk.NewStatus(fwk.Unschedulable, "preemption: not eligible due to workload aware preemption enabled"),
 		},
 		{
 			name: "pod with SchedulingGroup with GenericWorkload and TAS disabled should preempt",
@@ -3687,4 +3635,86 @@ func (m *mockMutableSnapshotLister) StartMutations() error {
 
 func (m *mockMutableSnapshotLister) EndMutations() error {
 	return m.endMutationError
+}
+
+type mockPodGroupEvaluator struct {
+	status *fwk.Status
+}
+
+func (m *mockPodGroupEvaluator) Preempt(ctx context.Context, pg *v1alpha3.PodGroup, pods []*v1.Pod, podGroupSchedulingFunc fwk.PodGroupSchedulingFunc) (*fwk.PodGroupPostFilterResult, *fwk.Status) {
+	return nil, m.status
+}
+
+type mockHandle struct {
+	fwk.Handle
+}
+
+func (m *mockHandle) MutableSnapshotSharedLister() fwk.MutableSnapshotSharedLister {
+	return &mockMutableSnapshotLister{}
+}
+
+func TestDefaultPreemption_PodGroupPostFilter_WorkloadPreemptionAttempts(t *testing.T) {
+	tests := []struct {
+		name   string
+		status *fwk.Status
+	}{
+		{
+			name:   "preemption success",
+			status: fwk.NewStatus(fwk.Success),
+		},
+		{
+			name:   "preemption unschedulable",
+			status: fwk.NewStatus(fwk.Unschedulable),
+		},
+		{
+			name:   "preemption error",
+			status: fwk.NewStatus(fwk.Error),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, ctx := ktesting.NewTestContext(t)
+			testRegistry := componentmetrics.NewKubeRegistry()
+			testRegistry.MustRegister(metrics.WorkloadPreemptionAttempts)
+
+			pl := &DefaultPreemption{
+				fh:                &mockHandle{},
+				podGroupEvaluator: &mockPodGroupEvaluator{status: tt.status},
+			}
+
+			expectedStatus := tt.status.Code().String()
+			stateBefore := captureWorkloadPreemptionAttempts(testRegistry, expectedStatus)
+
+			pgInfo := &framework.PodGroupInfo{PodGroup: st.MakePodGroup().Obj()}
+			pl.PodGroupPostFilter(ctx, nil, pgInfo, nil)
+
+			stateAfter := captureWorkloadPreemptionAttempts(testRegistry, expectedStatus)
+
+			diff := stateAfter.count - stateBefore.count
+			if diff != 1 {
+				t.Errorf("Expected %s count delta to be 1, got %d", expectedStatus, diff)
+			}
+		})
+	}
+}
+
+type workloadPreemptionAttemptsState struct {
+	count uint64
+}
+
+func captureWorkloadPreemptionAttempts(g componentmetrics.Gatherer, status string) workloadPreemptionAttemptsState {
+	state := workloadPreemptionAttemptsState{}
+	if count, err := getCounterFromGatherer(g, "scheduler_workload_preemption_attempts_total", status); err == nil {
+		state.count = count
+	}
+	return state
+}
+
+func getCounterFromGatherer(g componentmetrics.Gatherer, name string, resultLabelValue string) (uint64, error) {
+	vals, err := testutil.GetCounterValuesFromGatherer(g, name, nil, "result")
+	if err != nil {
+		return 0, err
+	}
+	return uint64(vals[resultLabelValue]), nil
 }

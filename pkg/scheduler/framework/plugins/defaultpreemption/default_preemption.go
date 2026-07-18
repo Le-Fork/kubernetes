@@ -24,6 +24,7 @@ import (
 
 	v1 "k8s.io/api/core/v1"
 	policy "k8s.io/api/policy/v1"
+	schedulingapi "k8s.io/api/scheduling/v1alpha3"
 	"k8s.io/apimachinery/pkg/runtime"
 	corev1helpers "k8s.io/component-helpers/scheduling/corev1"
 	"k8s.io/klog/v2"
@@ -61,6 +62,10 @@ type IsEligiblePodFunc func(nodeInfo fwk.NodeInfo, victim preemption.Victim, pre
 // as affinity between pods that are eligible to preempt each other isn't recommended.
 type MoreImportantVictimFunc func(victim1, victim2 preemption.Victim) bool
 
+type podGroupEvaluator interface {
+	Preempt(ctx context.Context, pg *schedulingapi.PodGroup, pods []*v1.Pod, podGroupSchedulingFunc fwk.PodGroupSchedulingFunc) (*fwk.PodGroupPostFilterResult, *fwk.Status)
+}
+
 // DefaultPreemption is a PostFilter plugin implements the preemption logic.
 type DefaultPreemption struct {
 	fh   fwk.Handle
@@ -70,7 +75,7 @@ type DefaultPreemption struct {
 	Executor          *preemption.Executor
 	Evaluator         *preemption.Evaluator
 	pgLister          fwk.PodGroupLister
-	podGroupEvaluator *preemption.PodGroupEvaluator
+	podGroupEvaluator podGroupEvaluator
 
 	// IsEligiblePod returns whether a victim (individual pod/pod group) is allowed to be preempted by a preemptor pod.
 	// This filtering is in addition to the internal requirement that the victim pod have lower
@@ -143,12 +148,6 @@ func (pl *DefaultPreemption) PostFilter(ctx context.Context, state fwk.CycleStat
 	defer func() {
 		metrics.PreemptionAttempts.Inc()
 	}()
-
-	if pod.Spec.SchedulingGroup != nil && pl.fts.EnableGenericWorkload {
-		// When GenericWorkload is enabled, the default preemption logic needs to be disabled for pod group scheduling to avoid performing preemption in pod by pod cycle
-		// of pod group scheduling. Instead the WAP will be called to perform preemption for the entire pod group.
-		return nil, fwk.NewStatus(fwk.Unschedulable, "preemption: not eligible due to workload aware preemption enabled")
-	}
 
 	result, status := pl.Evaluator.Preempt(ctx, state, pod, m)
 	msg := status.Message()
@@ -470,6 +469,10 @@ func (pl *DefaultPreemption) isPreemptionAllowedAcrossAllVictimNodes(victim *pre
 
 // PodGroupPostFilter runs a default preemption for the pod group.
 func (pl *DefaultPreemption) PodGroupPostFilter(ctx context.Context, state fwk.PodGroupCycleState, pgInfo fwk.PodGroupInfo, pgSchedulingFunc fwk.PodGroupSchedulingFunc) (postFilterResult *fwk.PodGroupPostFilterResult, status *fwk.Status) {
+	defer func() {
+		metrics.WorkloadPreemptionAttempts.WithLabelValues(status.Code().String()).Inc()
+	}()
+
 	if pl.fts.EnableCompositePodGroup && pgInfo.GetCompositePodGroup() != nil {
 		return nil, fwk.NewStatus(fwk.Unschedulable, "pod group preemption: not supported for composite pod groups yet")
 	}
