@@ -39,6 +39,7 @@ import (
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	apiresource "k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
@@ -636,6 +637,11 @@ func (kl *Kubelet) GetPodCgroupParent(pod *v1.Pod) string {
 	pcm := kl.containerManager.NewPodContainerManager()
 	_, cgroupParent := pcm.GetPodContainerName(pod)
 	return cgroupParent
+}
+
+// ResizeEphemeralVolume directly triggers a resize of the specified volume.
+func (kl *Kubelet) ResizeEphemeralVolume(pod *v1.Pod, volumeName string, newSize *apiresource.Quantity) error {
+	return kl.volumeManager.ResizeEphemeralVolume(pod, volumeName, newSize)
 }
 
 // GenerateRunContainerOptions generates the RunContainerOptions, which can be used by
@@ -2241,11 +2247,25 @@ func (kl *Kubelet) convertToAPIPodLevelResourcesStatus(logger klog.Logger, alloc
 	}
 
 	if cpuRequest != nil {
-		// If both the allocated & actual resources are at
-		// or below MinShares, preserve the allocated value in the API to avoid
-		// confusion and simplify comparisons.
+		// If both the allocated and actual values are at or below MinShares,
+		// preserve the allocated value in the API to avoid confusion and simplify
+		// comparisons at the cgroup minimum floor.
 		if cpuRequest.MilliValue() > cm.MinShares || resources.Requests.Cpu().MilliValue() > cm.MinShares {
-			resources.Requests[v1.ResourceCPU] = cpuRequest.DeepCopy()
+			allocatedMilliCPU := resources.Requests.Cpu().MilliValue()
+			allocatedShares := cm.MilliCPUToShares(allocatedMilliCPU)
+			// On cgroup v2, cpu.weight has coarse granularity and converting
+			// shares -> weight -> shares can be lossy. If the cgroup readback
+			// matches the round-tripped allocated shares, preserve the allocated
+			// milliCPU in the API. Otherwise treat it as a real change and use
+			// the actuated value.
+			if cpuConfig != nil && cpuConfig.CPUShares != nil &&
+				cm.CPUSharesEqualAfterV2RoundTrip(allocatedShares, *cpuConfig.CPUShares) {
+				logger.V(4).Info("Preserving allocated CPU request due to cgroup v2 round-trip",
+					"allocated", allocatedMilliCPU, "actuated", cpuRequest.MilliValue(),
+					"allocatedShares", allocatedShares, "readbackShares", *cpuConfig.CPUShares)
+			} else {
+				resources.Requests[v1.ResourceCPU] = cpuRequest.DeepCopy()
+			}
 		}
 	} else {
 		preserveOldResourcesValue(v1.ResourceCPU, oldPodStatus.Resources.Requests, resources.Requests)
