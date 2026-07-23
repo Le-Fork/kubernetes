@@ -96,7 +96,8 @@
           },
           "emptyDir": {
             "medium": "mediumValue",
-            "sizeLimit": "0"
+            "sizeLimit": "0",
+            "mode": 3
           },
           "gcePersistentDisk": {
             "pdName": "pdNameValue",
@@ -647,7 +648,8 @@
             },
             "grpc": {
               "port": 1,
-              "service": "serviceValue"
+              "service": "serviceValue",
+              "mode": "modeValue"
             },
             "initialDelaySeconds": 2,
             "timeoutSeconds": 3,
@@ -681,7 +683,8 @@
             },
             "grpc": {
               "port": 1,
-              "service": "serviceValue"
+              "service": "serviceValue",
+              "mode": "modeValue"
             },
             "initialDelaySeconds": 2,
             "timeoutSeconds": 3,
@@ -715,7 +718,8 @@
             },
             "grpc": {
               "port": 1,
-              "service": "serviceValue"
+              "service": "serviceValue",
+              "mode": "modeValue"
             },
             "initialDelaySeconds": 2,
             "timeoutSeconds": 3,
@@ -966,7 +970,8 @@
             },
             "grpc": {
               "port": 1,
-              "service": "serviceValue"
+              "service": "serviceValue",
+              "mode": "modeValue"
             },
             "initialDelaySeconds": 2,
             "timeoutSeconds": 3,
@@ -1000,7 +1005,8 @@
             },
             "grpc": {
               "port": 1,
-              "service": "serviceValue"
+              "service": "serviceValue",
+              "mode": "modeValue"
             },
             "initialDelaySeconds": 2,
             "timeoutSeconds": 3,
@@ -1034,7 +1040,8 @@
             },
             "grpc": {
               "port": 1,
-              "service": "serviceValue"
+              "service": "serviceValue",
+              "mode": "modeValue"
             },
             "initialDelaySeconds": 2,
             "timeoutSeconds": 3,
@@ -1285,7 +1292,8 @@
             },
             "grpc": {
               "port": 1,
-              "service": "serviceValue"
+              "service": "serviceValue",
+              "mode": "modeValue"
             },
             "initialDelaySeconds": 2,
             "timeoutSeconds": 3,
@@ -1319,7 +1327,8 @@
             },
             "grpc": {
               "port": 1,
-              "service": "serviceValue"
+              "service": "serviceValue",
+              "mode": "modeValue"
             },
             "initialDelaySeconds": 2,
             "timeoutSeconds": 3,
@@ -1353,7 +1362,8 @@
             },
             "grpc": {
               "port": 1,
-              "service": "serviceValue"
+              "service": "serviceValue",
+              "mode": "modeValue"
             },
             "initialDelaySeconds": 2,
             "timeoutSeconds": 3,
@@ -1862,7 +1872,13 @@
       "hostnameOverride": "hostnameOverrideValue",
       "schedulingGroup": {
         "podGroupName": "podGroupNameValue"
-      }
+      },
+      "evictionResponders": [
+        {
+          "name": "nameValue",
+          "priority": 2
+        }
+      ]
     }
   }
 }

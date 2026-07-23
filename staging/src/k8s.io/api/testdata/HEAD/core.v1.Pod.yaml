@@ -247,6 +247,7 @@ spec:
         - commandValue
       failureThreshold: 6
       grpc:
+        mode: modeValue
         port: 1
         service: serviceValue
       httpGet:
@@ -279,6 +280,7 @@ spec:
         - commandValue
       failureThreshold: 6
       grpc:
+        mode: modeValue
         port: 1
         service: serviceValue
       httpGet:
@@ -351,6 +353,7 @@ spec:
         - commandValue
       failureThreshold: 6
       grpc:
+        mode: modeValue
         port: 1
         service: serviceValue
       httpGet:
@@ -480,6 +483,7 @@ spec:
         - commandValue
       failureThreshold: 6
       grpc:
+        mode: modeValue
         port: 1
         service: serviceValue
       httpGet:
@@ -512,6 +516,7 @@ spec:
         - commandValue
       failureThreshold: 6
       grpc:
+        mode: modeValue
         port: 1
         service: serviceValue
       httpGet:
@@ -584,6 +589,7 @@ spec:
         - commandValue
       failureThreshold: 6
       grpc:
+        mode: modeValue
         port: 1
         service: serviceValue
       httpGet:
@@ -621,6 +627,9 @@ spec:
       subPath: subPathValue
       subPathExpr: subPathExprValue
     workingDir: workingDirValue
+  evictionResponders:
+  - name: nameValue
+    priority: 2
   hostAliases:
   - hostnames:
     - hostnamesValue
@@ -716,6 +725,7 @@ spec:
         - commandValue
       failureThreshold: 6
       grpc:
+        mode: modeValue
         port: 1
         service: serviceValue
       httpGet:
@@ -748,6 +758,7 @@ spec:
         - commandValue
       failureThreshold: 6
       grpc:
+        mode: modeValue
         port: 1
         service: serviceValue
       httpGet:
@@ -820,6 +831,7 @@ spec:
         - commandValue
       failureThreshold: 6
       grpc:
+        mode: modeValue
         port: 1
         service: serviceValue
       httpGet:
@@ -1011,6 +1023,7 @@ spec:
         user: 5
     emptyDir:
       medium: mediumValue
+      mode: 3
       sizeLimit: "0"
     ephemeral:
       volumeClaimTemplate:
@@ -1480,9 +1493,14 @@ status:
   nodeAllocatableResourceClaimStatuses:
   - containers:
     - containersValue
+    mapping:
+    - name: nameValue
+      quantity: "0"
+    overhead:
+    - name: nameValue
+      perContainer: "0"
+      perPod: "0"
     resourceClaimName: resourceClaimNameValue
-    resources:
-      resourcesKey: "0"
   nominatedNodeName: nominatedNodeNameValue
   observedGeneration: 17
   phase: phaseValue
@@ -1504,3 +1522,10 @@ status:
     requests:
       requestsKey: "0"
   startTime: "2007-01-01T01:01:01Z"
+  volumeHealth:
+  - healthConditions:
+    - message: messageValue
+      reason: reasonValue
+      status: statusValue
+    lastTransitionTime: "2003-01-01T01:01:01Z"
+    name: nameValue

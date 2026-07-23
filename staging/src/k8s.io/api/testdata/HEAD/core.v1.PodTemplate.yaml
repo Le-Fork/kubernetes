@@ -280,6 +280,7 @@ template:
           - commandValue
         failureThreshold: 6
         grpc:
+          mode: modeValue
           port: 1
           service: serviceValue
         httpGet:
@@ -312,6 +313,7 @@ template:
           - commandValue
         failureThreshold: 6
         grpc:
+          mode: modeValue
           port: 1
           service: serviceValue
         httpGet:
@@ -384,6 +386,7 @@ template:
           - commandValue
         failureThreshold: 6
         grpc:
+          mode: modeValue
           port: 1
           service: serviceValue
         httpGet:
@@ -513,6 +516,7 @@ template:
           - commandValue
         failureThreshold: 6
         grpc:
+          mode: modeValue
           port: 1
           service: serviceValue
         httpGet:
@@ -545,6 +549,7 @@ template:
           - commandValue
         failureThreshold: 6
         grpc:
+          mode: modeValue
           port: 1
           service: serviceValue
         httpGet:
@@ -617,6 +622,7 @@ template:
           - commandValue
         failureThreshold: 6
         grpc:
+          mode: modeValue
           port: 1
           service: serviceValue
         httpGet:
@@ -654,6 +660,9 @@ template:
         subPath: subPathValue
         subPathExpr: subPathExprValue
       workingDir: workingDirValue
+    evictionResponders:
+    - name: nameValue
+      priority: 2
     hostAliases:
     - hostnames:
       - hostnamesValue
@@ -749,6 +758,7 @@ template:
           - commandValue
         failureThreshold: 6
         grpc:
+          mode: modeValue
           port: 1
           service: serviceValue
         httpGet:
@@ -781,6 +791,7 @@ template:
           - commandValue
         failureThreshold: 6
         grpc:
+          mode: modeValue
           port: 1
           service: serviceValue
         httpGet:
@@ -853,6 +864,7 @@ template:
           - commandValue
         failureThreshold: 6
         grpc:
+          mode: modeValue
           port: 1
           service: serviceValue
         httpGet:
@@ -1044,6 +1056,7 @@ template:
           user: 5
       emptyDir:
         medium: mediumValue
+        mode: 3
         sizeLimit: "0"
       ephemeral:
         volumeClaimTemplate:

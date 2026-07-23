@@ -299,6 +299,7 @@ spec:
             - commandValue
           failureThreshold: 6
           grpc:
+            mode: modeValue
             port: 1
             service: serviceValue
           httpGet:
@@ -331,6 +332,7 @@ spec:
             - commandValue
           failureThreshold: 6
           grpc:
+            mode: modeValue
             port: 1
             service: serviceValue
           httpGet:
@@ -403,6 +405,7 @@ spec:
             - commandValue
           failureThreshold: 6
           grpc:
+            mode: modeValue
             port: 1
             service: serviceValue
           httpGet:
@@ -532,6 +535,7 @@ spec:
             - commandValue
           failureThreshold: 6
           grpc:
+            mode: modeValue
             port: 1
             service: serviceValue
           httpGet:
@@ -564,6 +568,7 @@ spec:
             - commandValue
           failureThreshold: 6
           grpc:
+            mode: modeValue
             port: 1
             service: serviceValue
           httpGet:
@@ -636,6 +641,7 @@ spec:
             - commandValue
           failureThreshold: 6
           grpc:
+            mode: modeValue
             port: 1
             service: serviceValue
           httpGet:
@@ -673,6 +679,9 @@ spec:
           subPath: subPathValue
           subPathExpr: subPathExprValue
         workingDir: workingDirValue
+      evictionResponders:
+      - name: nameValue
+        priority: 2
       hostAliases:
       - hostnames:
         - hostnamesValue
@@ -768,6 +777,7 @@ spec:
             - commandValue
           failureThreshold: 6
           grpc:
+            mode: modeValue
             port: 1
             service: serviceValue
           httpGet:
@@ -800,6 +810,7 @@ spec:
             - commandValue
           failureThreshold: 6
           grpc:
+            mode: modeValue
             port: 1
             service: serviceValue
           httpGet:
@@ -872,6 +883,7 @@ spec:
             - commandValue
           failureThreshold: 6
           grpc:
+            mode: modeValue
             port: 1
             service: serviceValue
           httpGet:
@@ -1063,6 +1075,7 @@ spec:
             user: 5
         emptyDir:
           medium: mediumValue
+          mode: 3
           sizeLimit: "0"
         ephemeral:
           volumeClaimTemplate:

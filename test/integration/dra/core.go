@@ -458,16 +458,17 @@ func testPublishResourceSlices(tCtx ktesting.TContext, haveLatestAPI bool, disab
 								}
 								return expected
 							}()...),
-							"BindingConditions":               gomega.Equal(device.BindingConditions),
-							"BindingFailureConditions":        gomega.Equal(device.BindingFailureConditions),
-							"BindsToNode":                     gomega.Equal(device.BindsToNode),
-							"NodeAllocatableResourceMappings": gomega.Equal(device.NodeAllocatableResourceMappings),
+							"BindingConditions":        gomega.Equal(device.BindingConditions),
+							"BindingFailureConditions": gomega.Equal(device.BindingFailureConditions),
+							"BindsToNode":              gomega.Equal(device.BindsToNode),
+							"NodeAllocatableResources": gomega.Equal(device.NodeAllocatableResources),
 						}))
 					}
 					return expected
 				}()...),
 				"PerDeviceNodeSelection": matchPointer(spec.PerDeviceNodeSelection),
 				"SharedCounters":         gomega.Equal(spec.SharedCounters),
+				"PartitionTypeAttribute": matchPointer(spec.PartitionTypeAttribute),
 			})))
 		}
 		return expectedSlices
@@ -746,7 +747,7 @@ func testControllerManagerMetrics(tCtx ktesting.TContext) {
 
 	// Helper function to get metrics from the metric counter directly
 	getMetricValue := func(status, adminAccess string) float64 {
-		value, err := testutil.GetCounterMetricValue(resourceclaimmetrics.ResourceClaimCreate.WithLabelValues(status, adminAccess))
+		value, err := testutil.GetCounterMetricValue(resourceclaimmetrics.ResourceClaimCreate.WithLabelValues(status, adminAccess, "", "Pod"))
 		if err != nil {
 			// If the metric doesn't exist yet, default to 0
 			return 0

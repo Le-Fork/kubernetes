@@ -760,6 +760,8 @@ func dropDisabledFields(
 	dropDisabledPodCertificateProjection(podSpec, oldPodSpec)
 	dropDisabledAtomicWriteVolumeUserFields(podSpec, oldPodSpec)
 	dropDisabledSchedulingGroup(podSpec, oldPodSpec)
+	dropDisabledGRPCContainerProbeTLS(podSpec, oldPodSpec)
+	dropDisabledEvictionResponders(podSpec, oldPodSpec)
 
 	if !utilfeature.DefaultFeatureGate.Enabled(features.InPlacePodVerticalScaling) && !inPlacePodVerticalScalingInUse(oldPodSpec) {
 		// Drop ResizePolicy fields. Don't drop updates to Resources field as template.spec.resources
@@ -793,6 +795,14 @@ func dropDisabledFields(
 		for i := range podSpec.EphemeralContainers {
 			for j := range podSpec.EphemeralContainers[i].VolumeMounts {
 				podSpec.EphemeralContainers[i].VolumeMounts[j].RecursiveReadOnly = nil
+			}
+		}
+	}
+
+	if !utilfeature.DefaultFeatureGate.Enabled(features.EmptyDirVolumeMode) && !emptyDirVolumeModeInUse(oldPodSpec) {
+		for i := range podSpec.Volumes {
+			if podSpec.Volumes[i].EmptyDir != nil {
+				podSpec.Volumes[i].EmptyDir.Mode = nil
 			}
 		}
 	}
@@ -956,6 +966,45 @@ func dropDisabledPodLevelResources(podSpec, oldPodSpec *api.PodSpec) {
 	}
 }
 
+func grpcProbeModeInUse(podSpec *api.PodSpec) bool {
+	if podSpec == nil {
+		return false
+	}
+	var inUse bool
+	VisitContainers(podSpec, AllContainers, func(c *api.Container, _ ContainerType) bool {
+		if probeHasGRPCMode(c.LivenessProbe) || probeHasGRPCMode(c.ReadinessProbe) || probeHasGRPCMode(c.StartupProbe) {
+			inUse = true
+			return false
+		}
+		return true
+	})
+	return inUse
+}
+
+// probeHasGRPCMode checks if Mode is set to any value (including Plaintext),
+// so existing field values are preserved when the feature gate is disabled.
+func probeHasGRPCMode(probe *api.Probe) bool {
+	return probe != nil && probe.GRPC != nil && probe.GRPC.Mode != nil
+}
+
+func dropDisabledGRPCContainerProbeTLS(podSpec, oldPodSpec *api.PodSpec) {
+	if utilfeature.DefaultFeatureGate.Enabled(features.GRPCContainerProbeTLS) || grpcProbeModeInUse(oldPodSpec) {
+		return
+	}
+	VisitContainers(podSpec, AllContainers, func(c *api.Container, _ ContainerType) bool {
+		dropProbeGRPCTLS(c.LivenessProbe)
+		dropProbeGRPCTLS(c.ReadinessProbe)
+		dropProbeGRPCTLS(c.StartupProbe)
+		return true
+	})
+}
+
+func dropProbeGRPCTLS(p *api.Probe) {
+	if p != nil && p.GRPC != nil {
+		p.GRPC.Mode = nil
+	}
+}
+
 // dropDisabledPodStatusFields removes disabled fields from the pod status
 func dropDisabledPodStatusFields(podStatus, oldPodStatus *api.PodStatus, podSpec, oldPodSpec *api.PodSpec) {
 	// the new status is always be non-nil
@@ -1062,6 +1111,9 @@ func dropDisabledPodStatusFields(podStatus, oldPodStatus *api.PodStatus, podSpec
 
 	dropPodNodeAllocatableResourceStatus(podStatus, oldPodStatus)
 
+	if !utilfeature.DefaultFeatureGate.Enabled(features.CSIVolumeHealth) && !volumeHealthInUse(oldPodStatus) {
+		podStatus.VolumeHealth = nil
+	}
 }
 
 // dropDisabledDynamicResourceAllocationFields removes pod claim references from
@@ -1095,6 +1147,13 @@ func draNodeAllocatableResourceStatusInUse(podStatus *api.PodStatus) bool {
 		return false
 	}
 	return len(podStatus.NodeAllocatableResourceClaimStatuses) > 0
+}
+
+func volumeHealthInUse(podStatus *api.PodStatus) bool {
+	if podStatus == nil {
+		return false
+	}
+	return len(podStatus.VolumeHealth) > 0
 }
 
 func resourceHealthStatusInUse(podStatus *api.PodStatus) bool {
@@ -1479,6 +1538,18 @@ func rroInUse(podSpec *api.PodSpec) bool {
 		return true
 	})
 	return inUse
+}
+
+func emptyDirVolumeModeInUse(podSpec *api.PodSpec) bool {
+	if podSpec == nil {
+		return false
+	}
+	for _, vol := range podSpec.Volumes {
+		if vol.EmptyDir != nil && vol.EmptyDir.Mode != nil {
+			return true
+		}
+	}
+	return false
 }
 
 func dropDisabledClusterTrustBundleProjection(podSpec, oldPodSpec *api.PodSpec) {
@@ -2343,4 +2414,20 @@ func DropInitContainerAnnotations(annotations map[string]string) {
 	for k := range initContainerAnnotations {
 		delete(annotations, k)
 	}
+}
+
+// dropDisabledEvictionResponders removes eviction responders from its spec
+// unless it is already used by the old pod spec.
+func dropDisabledEvictionResponders(podSpec, oldPodSpec *api.PodSpec) {
+	if !utilfeature.DefaultFeatureGate.Enabled(features.EvictionRequestAPI) && !evictionRespondersInUse(oldPodSpec) {
+		podSpec.EvictionResponders = nil
+	}
+}
+
+func evictionRespondersInUse(podSpec *api.PodSpec) bool {
+	if podSpec == nil {
+		return false
+	}
+
+	return len(podSpec.EvictionResponders) > 0
 }

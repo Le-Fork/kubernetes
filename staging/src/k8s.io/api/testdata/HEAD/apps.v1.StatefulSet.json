@@ -112,7 +112,8 @@
             },
             "emptyDir": {
               "medium": "mediumValue",
-              "sizeLimit": "0"
+              "sizeLimit": "0",
+              "mode": 3
             },
             "gcePersistentDisk": {
               "pdName": "pdNameValue",
@@ -663,7 +664,8 @@
               },
               "grpc": {
                 "port": 1,
-                "service": "serviceValue"
+                "service": "serviceValue",
+                "mode": "modeValue"
               },
               "initialDelaySeconds": 2,
               "timeoutSeconds": 3,
@@ -697,7 +699,8 @@
               },
               "grpc": {
                 "port": 1,
-                "service": "serviceValue"
+                "service": "serviceValue",
+                "mode": "modeValue"
               },
               "initialDelaySeconds": 2,
               "timeoutSeconds": 3,
@@ -731,7 +734,8 @@
               },
               "grpc": {
                 "port": 1,
-                "service": "serviceValue"
+                "service": "serviceValue",
+                "mode": "modeValue"
               },
               "initialDelaySeconds": 2,
               "timeoutSeconds": 3,
@@ -982,7 +986,8 @@
               },
               "grpc": {
                 "port": 1,
-                "service": "serviceValue"
+                "service": "serviceValue",
+                "mode": "modeValue"
               },
               "initialDelaySeconds": 2,
               "timeoutSeconds": 3,
@@ -1016,7 +1021,8 @@
               },
               "grpc": {
                 "port": 1,
-                "service": "serviceValue"
+                "service": "serviceValue",
+                "mode": "modeValue"
               },
               "initialDelaySeconds": 2,
               "timeoutSeconds": 3,
@@ -1050,7 +1056,8 @@
               },
               "grpc": {
                 "port": 1,
-                "service": "serviceValue"
+                "service": "serviceValue",
+                "mode": "modeValue"
               },
               "initialDelaySeconds": 2,
               "timeoutSeconds": 3,
@@ -1301,7 +1308,8 @@
               },
               "grpc": {
                 "port": 1,
-                "service": "serviceValue"
+                "service": "serviceValue",
+                "mode": "modeValue"
               },
               "initialDelaySeconds": 2,
               "timeoutSeconds": 3,
@@ -1335,7 +1343,8 @@
               },
               "grpc": {
                 "port": 1,
-                "service": "serviceValue"
+                "service": "serviceValue",
+                "mode": "modeValue"
               },
               "initialDelaySeconds": 2,
               "timeoutSeconds": 3,
@@ -1369,7 +1378,8 @@
               },
               "grpc": {
                 "port": 1,
-                "service": "serviceValue"
+                "service": "serviceValue",
+                "mode": "modeValue"
               },
               "initialDelaySeconds": 2,
               "timeoutSeconds": 3,
@@ -1878,7 +1888,13 @@
         "hostnameOverride": "hostnameOverrideValue",
         "schedulingGroup": {
           "podGroupName": "podGroupNameValue"
-        }
+        },
+        "evictionResponders": [
+          {
+            "name": "nameValue",
+            "priority": 2
+          }
+        ]
       }
     },
     "volumeClaimTemplates": [
@@ -1995,6 +2011,16 @@
           "modifyVolumeStatus": {
             "targetVolumeAttributesClassName": "targetVolumeAttributesClassNameValue",
             "status": "statusValue"
+          },
+          "healthStatus": {
+            "healthConditions": [
+              {
+                "status": "statusValue",
+                "reason": "reasonValue",
+                "message": "messageValue"
+              }
+            ],
+            "lastTransitionTime": "2002-01-01T01:01:01Z"
           }
         }
       }

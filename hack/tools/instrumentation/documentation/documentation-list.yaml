@@ -2568,6 +2568,17 @@
   componentEndpoints:
   - component: kubelet
     endpoint: /metrics/resource
+- name: csi_node_storage_health_status
+  help: CSI node storage backend health conditions currently reported (1 = present).
+  type: Gauge
+  stabilityLevel: ALPHA
+  labels:
+  - driver_name
+  - reason
+  - status
+  componentEndpoints:
+  - component: kubelet
+    endpoint: /metrics
 - name: operations_seconds
   subsystem: csi
   help: Container Storage Interface operation duration with gRPC error code status
@@ -2724,12 +2735,14 @@
     endpoint: /metrics
 - name: resourceclaim_creates_total
   subsystem: dynamic_resource_allocation
-  help: Number of ResourceClaims creation requests, categorized by creation status
-    and admin access
+  help: Number of ResourceClaims creation requests, categorized by creation status,
+    admin access, and owning API group and kind (either Pod or scheduling.k8s.io/PodGroup)
   type: Counter
   stabilityLevel: ALPHA
   labels:
   - admin_access
+  - owner_api_group
+  - owner_api_kind
   - status
   componentEndpoints:
   - component: kube-controller-manager
@@ -4204,6 +4217,19 @@
   componentEndpoints:
   - component: kubelet
     endpoint: /metrics
+- name: pod_level_resources_admission_total
+  subsystem: kubelet
+  help: Total number of pods admitted during Kubelet admission, categorized by resource
+    configuration mode (pod_and_container_level, pod_level, container_level, or empty
+    for unconfigured/BestEffort) and QoS class.
+  type: Counter
+  stabilityLevel: ALPHA
+  labels:
+  - config_mode
+  - qos_class
+  componentEndpoints:
+  - component: kubelet
+    endpoint: /metrics
 - name: pod_pending_resizes
   subsystem: kubelet
   help: 'Number of pending resizes for pods. Label ''priority_bucket'' classifies
@@ -4215,6 +4241,54 @@
   labels:
   - priority_bucket
   - reason
+  componentEndpoints:
+  - component: kubelet
+    endpoint: /metrics
+- name: pod_requests_get_total
+  subsystem: kubelet
+  help: Number of requests to the PodsAPI Get endpoint. Broken down by server api
+    version and status code.
+  type: Counter
+  stabilityLevel: ALPHA
+  labels:
+  - server_api_version
+  - status_code
+  componentEndpoints:
+  - component: kubelet
+    endpoint: /metrics
+- name: pod_requests_list_total
+  subsystem: kubelet
+  help: Number of requests to the PodsAPI List endpoint. Broken down by server api
+    version and status code.
+  type: Counter
+  stabilityLevel: ALPHA
+  labels:
+  - server_api_version
+  - status_code
+  componentEndpoints:
+  - component: kubelet
+    endpoint: /metrics
+- name: pod_requests_total
+  subsystem: kubelet
+  help: Cumulative number of requests to the PodsAPI endpoint. Broken down by server
+    api version and status code.
+  type: Counter
+  stabilityLevel: ALPHA
+  labels:
+  - server_api_version
+  - status_code
+  componentEndpoints:
+  - component: kubelet
+    endpoint: /metrics
+- name: pod_requests_watch_total
+  subsystem: kubelet
+  help: Number of requests to the PodsAPI Watch endpoint. Broken down by server api
+    version and status code.
+  type: Counter
+  stabilityLevel: ALPHA
+  labels:
+  - server_api_version
+  - status_code
   componentEndpoints:
   - component: kubelet
     endpoint: /metrics
@@ -4841,17 +4915,6 @@
     endpoint: /metrics
 - name: kubelet_volume_stats_capacity_bytes
   help: Capacity in bytes of the volume
-  type: Custom
-  stabilityLevel: ALPHA
-  labels:
-  - namespace
-  - persistentvolumeclaim
-  componentEndpoints:
-  - component: kubelet
-    endpoint: /metrics
-- name: kubelet_volume_stats_health_status_abnormal
-  help: Abnormal volume health status. The count is either 1 or 0. 1 indicates the
-    volume is unhealthy, 0 indicates volume is healthy
   type: Custom
   stabilityLevel: ALPHA
   labels:
@@ -6270,8 +6333,9 @@
 - name: route_sync_total
   subsystem: route_controller
   help: A metric counting the number of route reconciles with the cloud provider,
-    labeled by the trigger (periodic or node_change) and the outcome (changed if at
-    least one route was created or deleted, otherwise noop).
+    labeled by the trigger (periodic or node_change) and the outcome (error if the
+    reconcile failed, changed if at least one route was created or deleted, otherwise
+    noop).
   type: Counter
   stabilityLevel: ALPHA
   labels:
