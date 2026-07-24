@@ -8706,6 +8706,12 @@ var schemaYAML = typed.YAMLObject(`types:
 - name: io.k8s.api.core.v1.VolumeMount
   map:
     fields:
+    - name: bindMountOptions
+      type:
+        list:
+          elementType:
+            scalar: string
+          elementRelationship: associative
     - name: mountPath
       type:
         scalar: string
@@ -13241,6 +13247,12 @@ var schemaYAML = typed.YAMLObject(`types:
     - name: shareID
       type:
         scalar: string
+    - name: skipNodeOperations
+      type:
+        list:
+          elementType:
+            scalar: string
+          elementRelationship: associative
     - name: tolerations
       type:
         list:
@@ -13630,6 +13642,12 @@ var schemaYAML = typed.YAMLObject(`types:
           elementType:
             namedType: io.k8s.api.resource.v1.CounterSet
           elementRelationship: atomic
+    - name: skipNodeOperations
+      type:
+        list:
+          elementType:
+            scalar: string
+          elementRelationship: associative
 - name: io.k8s.api.resource.v1alpha3.DeviceTaint
   map:
     fields:
@@ -14281,6 +14299,12 @@ var schemaYAML = typed.YAMLObject(`types:
     - name: shareID
       type:
         scalar: string
+    - name: skipNodeOperations
+      type:
+        list:
+          elementType:
+            scalar: string
+          elementRelationship: associative
     - name: tolerations
       type:
         list:
@@ -14585,6 +14609,12 @@ var schemaYAML = typed.YAMLObject(`types:
           elementType:
             namedType: io.k8s.api.resource.v1beta1.CounterSet
           elementRelationship: atomic
+    - name: skipNodeOperations
+      type:
+        list:
+          elementType:
+            scalar: string
+          elementRelationship: associative
 - name: io.k8s.api.resource.v1beta2.AllocatedDeviceStatus
   map:
     fields:
@@ -14989,6 +15019,12 @@ var schemaYAML = typed.YAMLObject(`types:
     - name: shareID
       type:
         scalar: string
+    - name: skipNodeOperations
+      type:
+        list:
+          elementType:
+            scalar: string
+          elementRelationship: associative
     - name: tolerations
       type:
         list:
@@ -15378,6 +15414,12 @@ var schemaYAML = typed.YAMLObject(`types:
           elementType:
             namedType: io.k8s.api.resource.v1beta2.CounterSet
           elementRelationship: atomic
+    - name: skipNodeOperations
+      type:
+        list:
+          elementType:
+            scalar: string
+          elementRelationship: associative
 - name: io.k8s.api.scheduling.v1.PriorityClass
   map:
     fields:

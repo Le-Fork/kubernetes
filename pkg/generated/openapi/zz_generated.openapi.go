@@ -33615,6 +33615,25 @@ func schema_k8sio_api_core_v1_VolumeMount(ref common.ReferenceCallback) common.O
 							Format:      "",
 						},
 					},
+					"bindMountOptions": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-list-type": "set",
+							},
+						},
+						SchemaProps: spec.SchemaProps{
+							Description: "bindMountOptions is the list of additional bind mount options to apply when mounting this volume into the container. Allowed values are noexec, nodev, and nosuid. These are Linux mount options and have no effect on Windows nodes. This field is not supported with image volumes. This is an alpha field and requires enabling the VolumeBindMountOptions feature gate.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Type:   []string{"string"},
+										Format: "",
+									},
+								},
+							},
+						},
+					},
 				},
 				Required: []string{"name", "mountPath"},
 			},
@@ -49243,6 +49262,26 @@ func schema_k8sio_api_resource_v1_DeviceRequestAllocationResult(ref common.Refer
 							},
 						},
 					},
+					"skipNodeOperations": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-list-type": "set",
+							},
+						},
+						SchemaProps: spec.SchemaProps{
+							Description: "SkipNodeOperations lists node-local resource operations (gRPC calls) that will be skipped for this allocated device when determining whether operations are necessary on the node. If all allocated devices for a driver in a claim skip an operation, that gRPC call will be skipped. It is a copy of the ResourceSlice.spec.skipNodeOperations value at the time when the device was allocated.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Type:   []string{"string"},
+										Format: "",
+										Enum:   []interface{}{"*", "NodePrepareResources", "NodeUnprepareResources"},
+									},
+								},
+							},
+						},
+					},
 				},
 				Required: []string{"request", "driver", "pool", "device"},
 			},
@@ -50492,6 +50531,26 @@ func schema_k8sio_api_resource_v1_ResourceSliceSpec(ref common.ReferenceCallback
 							Description: "PartitionTypeAttribute names a string device attribute (by fully qualified name, e.g. \"gpu.example.com/profile\") whose value labels each device with its partition type, such as \"Full\" or \"Half\" for a MIG-style GPU.\n\nWhen set, every partitionable device in the slice must carry the attribute and devices sharing a value must share the same ConsumesCounters cost.",
 							Type:        []string{"string"},
 							Format:      "",
+						},
+					},
+					"skipNodeOperations": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-list-type": "set",
+							},
+						},
+						SchemaProps: spec.SchemaProps{
+							Description: "SkipNodeOperations lists node-local resource operations (gRPC calls) that will be skipped for the devices in this slice when determining whether operations are necessary on the node. If all allocated devices for a driver in a claim skip an operation, that gRPC call will be skipped. Valid values are:\n\n- \"NodePrepareResources\": NodePrepareResources gRPC calls are skipped. This\n  value cannot be specified unless \"NodeUnprepareResources\" is also listed\n  (or \"*\" is specified).\n- \"NodeUnprepareResources\": NodeUnprepareResources gRPC calls are skipped. - \"*\": All node-local resource operations are skipped.\n\nOther values may be added in the future. The kubelet must ignore unknown values.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Type:   []string{"string"},
+										Format: "",
+										Enum:   []interface{}{"*", "NodePrepareResources", "NodeUnprepareResources"},
+									},
+								},
+							},
 						},
 					},
 				},
@@ -52612,6 +52671,26 @@ func schema_k8sio_api_resource_v1beta1_DeviceRequestAllocationResult(ref common.
 							},
 						},
 					},
+					"skipNodeOperations": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-list-type": "set",
+							},
+						},
+						SchemaProps: spec.SchemaProps{
+							Description: "SkipNodeOperations lists node-local resource operations (gRPC calls) that will be skipped for this allocated device when determining whether operations are necessary on the node. If all allocated devices for a driver in a claim skip an operation, that gRPC call will be skipped. It is a copy of the ResourceSlice.spec.skipNodeOperations value at the time when the device was allocated.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Type:   []string{"string"},
+										Format: "",
+										Enum:   []interface{}{"*", "NodePrepareResources", "NodeUnprepareResources"},
+									},
+								},
+							},
+						},
+					},
 				},
 				Required: []string{"request", "driver", "pool", "device"},
 			},
@@ -53571,6 +53650,26 @@ func schema_k8sio_api_resource_v1beta1_ResourceSliceSpec(ref common.ReferenceCal
 							Description: "PartitionTypeAttribute names a string device attribute (by fully qualified name, e.g. \"gpu.example.com/profile\") whose value labels each device with its partition type, such as \"Full\" or \"Half\" for a MIG-style GPU.\n\nWhen set, every partitionable device in the slice must carry the attribute and devices sharing a value must share the same ConsumesCounters cost.",
 							Type:        []string{"string"},
 							Format:      "",
+						},
+					},
+					"skipNodeOperations": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-list-type": "set",
+							},
+						},
+						SchemaProps: spec.SchemaProps{
+							Description: "SkipNodeOperations lists node-local resource operations (gRPC calls) that will be skipped for the devices in this slice when determining whether operations are necessary on the node. If all allocated devices for a driver in a claim skip an operation, that gRPC call will be skipped. Valid values are:\n\n- \"NodePrepareResources\": NodePrepareResources gRPC calls are skipped. This\n  value cannot be specified unless \"NodeUnprepareResources\" is also listed\n  (or \"*\" is specified).\n- \"NodeUnprepareResources\": NodeUnprepareResources gRPC calls are skipped. - \"*\": All node-local resource operations are skipped.\n\nOther values may be added in the future. The kubelet must ignore unknown values.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Type:   []string{"string"},
+										Format: "",
+										Enum:   []interface{}{"*", "NodePrepareResources", "NodeUnprepareResources"},
+									},
+								},
+							},
 						},
 					},
 				},
@@ -54863,6 +54962,26 @@ func schema_k8sio_api_resource_v1beta2_DeviceRequestAllocationResult(ref common.
 							},
 						},
 					},
+					"skipNodeOperations": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-list-type": "set",
+							},
+						},
+						SchemaProps: spec.SchemaProps{
+							Description: "SkipNodeOperations lists node-local resource operations (gRPC calls) that will be skipped for this allocated device when determining whether operations are necessary on the node. If all allocated devices for a driver in a claim skip an operation, that gRPC call will be skipped. It is a copy of the ResourceSlice.spec.skipNodeOperations value at the time when the device was allocated.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Type:   []string{"string"},
+										Format: "",
+										Enum:   []interface{}{"*", "NodePrepareResources", "NodeUnprepareResources"},
+									},
+								},
+							},
+						},
+					},
 				},
 				Required: []string{"request", "driver", "pool", "device"},
 			},
@@ -56112,6 +56231,26 @@ func schema_k8sio_api_resource_v1beta2_ResourceSliceSpec(ref common.ReferenceCal
 							Description: "PartitionTypeAttribute names a string device attribute (by fully qualified name, e.g. \"gpu.example.com/profile\") whose value labels each device with its partition type, such as \"Full\" or \"Half\" for a MIG-style GPU.\n\nWhen set, every partitionable device in the slice must carry the attribute and devices sharing a value must share the same ConsumesCounters cost.",
 							Type:        []string{"string"},
 							Format:      "",
+						},
+					},
+					"skipNodeOperations": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-list-type": "set",
+							},
+						},
+						SchemaProps: spec.SchemaProps{
+							Description: "SkipNodeOperations lists node-local resource operations (gRPC calls) that will be skipped for the devices in this slice when determining whether operations are necessary on the node. If all allocated devices for a driver in a claim skip an operation, that gRPC call will be skipped. Valid values are:\n\n- \"NodePrepareResources\": NodePrepareResources gRPC calls are skipped. This\n  value cannot be specified unless \"NodeUnprepareResources\" is also listed\n  (or \"*\" is specified).\n- \"NodeUnprepareResources\": NodeUnprepareResources gRPC calls are skipped. - \"*\": All node-local resource operations are skipped.\n\nOther values may be added in the future. The kubelet must ignore unknown values.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Type:   []string{"string"},
+										Format: "",
+										Enum:   []interface{}{"*", "NodePrepareResources", "NodeUnprepareResources"},
+									},
+								},
+							},
 						},
 					},
 				},

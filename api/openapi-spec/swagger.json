@@ -13227,6 +13227,14 @@
     "io.k8s.api.core.v1.VolumeMount": {
       "description": "VolumeMount describes a mounting of a Volume within a container.",
       "properties": {
+        "bindMountOptions": {
+          "description": "bindMountOptions is the list of additional bind mount options to apply when mounting this volume into the container. Allowed values are noexec, nodev, and nosuid. These are Linux mount options and have no effect on Windows nodes. This field is not supported with image volumes. This is an alpha field and requires enabling the VolumeBindMountOptions feature gate.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-kubernetes-list-type": "set"
+        },
         "mountPath": {
           "description": "Path within the container at which the volume should be mounted.",
           "type": "string"
@@ -16923,6 +16931,14 @@
           "description": "ShareID uniquely identifies an individual allocation share of the device, used when the device supports multiple simultaneous allocations. It serves as an additional map key to differentiate concurrent shares of the same device.",
           "type": "string"
         },
+        "skipNodeOperations": {
+          "description": "SkipNodeOperations lists node-local resource operations (gRPC calls) that will be skipped for this allocated device when determining whether operations are necessary on the node. If all allocated devices for a driver in a claim skip an operation, that gRPC call will be skipped. It is a copy of the ResourceSlice.spec.skipNodeOperations value at the time when the device was allocated.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-kubernetes-list-type": "set"
+        },
         "tolerations": {
           "description": "A copy of all tolerations specified in the request at the time when the device got allocated.\n\nThe maximum number of tolerations is 16.\n\nThis is a beta field and requires enabling the DRADeviceTaints feature gate.",
           "items": {
@@ -17665,6 +17681,14 @@
           },
           "type": "array",
           "x-kubernetes-list-type": "atomic"
+        },
+        "skipNodeOperations": {
+          "description": "SkipNodeOperations lists node-local resource operations (gRPC calls) that will be skipped for the devices in this slice when determining whether operations are necessary on the node. If all allocated devices for a driver in a claim skip an operation, that gRPC call will be skipped. Valid values are:\n\n- \"NodePrepareResources\": NodePrepareResources gRPC calls are skipped. This\n  value cannot be specified unless \"NodeUnprepareResources\" is also listed\n  (or \"*\" is specified).\n- \"NodeUnprepareResources\": NodeUnprepareResources gRPC calls are skipped. - \"*\": All node-local resource operations are skipped.\n\nOther values may be added in the future. The kubelet must ignore unknown values.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-kubernetes-list-type": "set"
         }
       },
       "required": [
@@ -18794,6 +18818,14 @@
           "description": "ShareID uniquely identifies an individual allocation share of the device, used when the device supports multiple simultaneous allocations. It serves as an additional map key to differentiate concurrent shares of the same device.",
           "type": "string"
         },
+        "skipNodeOperations": {
+          "description": "SkipNodeOperations lists node-local resource operations (gRPC calls) that will be skipped for this allocated device when determining whether operations are necessary on the node. If all allocated devices for a driver in a claim skip an operation, that gRPC call will be skipped. It is a copy of the ResourceSlice.spec.skipNodeOperations value at the time when the device was allocated.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-kubernetes-list-type": "set"
+        },
         "tolerations": {
           "description": "A copy of all tolerations specified in the request at the time when the device got allocated.\n\nThe maximum number of tolerations is 16.\n\nThis is a beta field and requires enabling the DRADeviceTaints feature gate.",
           "items": {
@@ -19365,6 +19397,14 @@
           },
           "type": "array",
           "x-kubernetes-list-type": "atomic"
+        },
+        "skipNodeOperations": {
+          "description": "SkipNodeOperations lists node-local resource operations (gRPC calls) that will be skipped for the devices in this slice when determining whether operations are necessary on the node. If all allocated devices for a driver in a claim skip an operation, that gRPC call will be skipped. Valid values are:\n\n- \"NodePrepareResources\": NodePrepareResources gRPC calls are skipped. This\n  value cannot be specified unless \"NodeUnprepareResources\" is also listed\n  (or \"*\" is specified).\n- \"NodeUnprepareResources\": NodeUnprepareResources gRPC calls are skipped. - \"*\": All node-local resource operations are skipped.\n\nOther values may be added in the future. The kubelet must ignore unknown values.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-kubernetes-list-type": "set"
         }
       },
       "required": [
@@ -20011,6 +20051,14 @@
         "shareID": {
           "description": "ShareID uniquely identifies an individual allocation share of the device, used when the device supports multiple simultaneous allocations. It serves as an additional map key to differentiate concurrent shares of the same device.",
           "type": "string"
+        },
+        "skipNodeOperations": {
+          "description": "SkipNodeOperations lists node-local resource operations (gRPC calls) that will be skipped for this allocated device when determining whether operations are necessary on the node. If all allocated devices for a driver in a claim skip an operation, that gRPC call will be skipped. It is a copy of the ResourceSlice.spec.skipNodeOperations value at the time when the device was allocated.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-kubernetes-list-type": "set"
         },
         "tolerations": {
           "description": "A copy of all tolerations specified in the request at the time when the device got allocated.\n\nThe maximum number of tolerations is 16.\n\nThis is a beta field and requires enabling the DRADeviceTaints feature gate.",
@@ -20754,6 +20802,14 @@
           },
           "type": "array",
           "x-kubernetes-list-type": "atomic"
+        },
+        "skipNodeOperations": {
+          "description": "SkipNodeOperations lists node-local resource operations (gRPC calls) that will be skipped for the devices in this slice when determining whether operations are necessary on the node. If all allocated devices for a driver in a claim skip an operation, that gRPC call will be skipped. Valid values are:\n\n- \"NodePrepareResources\": NodePrepareResources gRPC calls are skipped. This\n  value cannot be specified unless \"NodeUnprepareResources\" is also listed\n  (or \"*\" is specified).\n- \"NodeUnprepareResources\": NodeUnprepareResources gRPC calls are skipped. - \"*\": All node-local resource operations are skipped.\n\nOther values may be added in the future. The kubelet must ignore unknown values.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-kubernetes-list-type": "set"
         }
       },
       "required": [
