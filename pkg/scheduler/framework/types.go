@@ -612,8 +612,8 @@ type QueueingParams struct {
 	// It shouldn't be updated once initialized. It's used to record the e2e scheduling
 	// latency for an entity.
 	InitialAttemptTimestamp *time.Time
-	// UnschedulablePlugins records the plugin names that the entity failed with Unschedulable or UnschedulableAndUnresolvable status
-	// at specific extension points: PreFilter, Filter, Reserve, or Permit (WaitOnPermit).
+	// UnschedulablePlugins records the plugin names that the entity failed with Wait, Unschedulable or UnschedulableAndUnresolvable status
+	// at specific extension points: PreFilter, Filter, Reserve, Permit (WaitOnPermit) or PlacementFeasible.
 	// If entities are rejected at other extension points,
 	// they're assumed to be unexpected errors (e.g., temporal network issue, plugin implementation issue, etc)
 	// and retried soon after a backoff period.
@@ -1223,8 +1223,11 @@ func (pgi *PodGroupInfo) GetType() fwk.EntityKeyType {
 	return pgi.Type
 }
 
-func (pgi *PodGroupInfo) GetKey() string {
-	return fmt.Sprintf("%s/%s/%s", pgi.Type, pgi.Namespace, pgi.Name)
+func (pgi *PodGroupInfo) GetKey() fwk.EntityKey {
+	if pgi.Type == fwk.CompositePodGroupKeyType {
+		return fwk.CompositePodGroupKey(pgi.Namespace, pgi.Name)
+	}
+	return fwk.PodGroupKey(pgi.Namespace, pgi.Name)
 }
 
 // GetUnscheduledPods returns the unscheduled pods for this pod group.
