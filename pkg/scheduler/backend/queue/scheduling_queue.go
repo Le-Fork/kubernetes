@@ -83,9 +83,9 @@ const (
 )
 
 // PreEnqueueCheck is a function type. It's used to build functions that
-// run against a Pod and the caller can choose to enqueue or skip the Pod
+// run against an entity and the caller can choose to enqueue or skip the entity
 // by the checking result.
-type PreEnqueueCheck func(pod *v1.Pod) bool
+type PreEnqueueCheck func(entity framework.QueuedEntityInfo) bool
 
 // PodSigner creates a scheduling signature for a pod that represents its scheduling requirements.
 // The signature is used by the opportunistic batching feature (KEP-5598) to reuse scheduling decisions.
@@ -950,11 +950,15 @@ func (p *PriorityQueue) addToPodGroupIfExists(logger klog.Logger, pInfo *framewo
 	}
 	rootInfo := entity.(*framework.QueuedPodGroupInfo)
 	rootInfo.AddPod(pInfo)
+	// Capture the root type and references before requeueing. Once the root is added to
+	// activeQ, it can be popped and processed before this goroutine logs the update.
+	rootType, rootRef := rootInfo.Type(), klog.KObj(rootInfo)
+	podRef := klog.KObj(pInfo)
 	queue := p.requeueEntityWithQueueingStrategy(logger, rootInfo, strategy, framework.EventUnscheduledPodAdd.Label())
 	if queue == activeQ || (p.isPopFromBackoffQEnabled && queue == backoffQ) {
 		p.activeQ.broadcast()
 	}
-	logger.V(5).Info("Pod added to existing root group info", "rootType", rootInfo.Type(), "root", klog.KObj(rootInfo), "pod", klog.KObj(pInfo), "queue", queue)
+	logger.V(5).Info("Pod added to existing root group info", "rootType", rootType, "root", rootRef, "pod", podRef, "queue", queue)
 	return true
 }
 
@@ -1426,14 +1430,14 @@ func (p *PriorityQueue) Update(ctx context.Context, oldPod, newPod *v1.Pod) {
 		// Plugins have to implement a QueueingHint for Pod/Update event
 		// if the rejection from them could be resolved by updating unscheduled Pods itself.
 		for _, evt := range events {
-			// Here, the entityRef is captured for logging, to prevent a data race that can occur in the logger below,
-			// where a pod re-queued to activeQ in requeueEntityWithQueueingStrategy is popped and processed quickly enough,
-			// so the write in its failure handler overwrites the pod object in PodInfo, which is accessed for logging.
-			entityRef := klog.KObj(entity)
+			// Capture the entity type and reference before requeueing. Once the entity is added to activeQ,
+			// it can be popped and processed before this goroutine logs the update. The scheduling cycle can
+			// then mutate fields accessed by Type and KObj.
+			entityType, entityRef := entity.Type(), klog.KObj(entity)
 			hint := p.isEntityWorthRequeuing(logger, entity, evt, oldPod, newPod, nil)
 			queue := p.requeueEntityWithQueueingStrategy(logger, entity, hint, evt.Label())
 			if queue != unschedulableQ {
-				logger.V(5).Info("Entity moved to an internal scheduling queue because the Pod is updated", "type", entity.Type(), "entity", entityRef, "pod", klog.KObj(newPod), "event", evt.Label(), "queue", queue)
+				logger.V(5).Info("Entity moved to an internal scheduling queue because the Pod is updated", "type", entityType, "entity", entityRef, "pod", klog.KObj(newPod), "event", evt.Label(), "queue", queue)
 			}
 			if queue == activeQ || (p.isPopFromBackoffQEnabled && queue == backoffQ) {
 				p.activeQ.broadcast()
@@ -1714,7 +1718,7 @@ func (p *PriorityQueue) collectEntitiesToEvaluate(logger klog.Logger, event fwk.
 		for nn := range hintKeys.candidatePods {
 			entityKey := fwk.PodKey(nn.Namespace, nn.Name).String()
 			if entity, exists := p.unschedulableEntities.entityInfoMap[entityKey]; exists {
-				if preCheck == nil || preCheck(entity.(*framework.QueuedPodInfo).Pod) {
+				if preCheck == nil || preCheck(entity) {
 					entities = append(entities, entity)
 				}
 				continue
@@ -1730,9 +1734,7 @@ func (p *PriorityQueue) collectEntitiesToEvaluate(logger klog.Logger, event fwk.
 					entityKey = fwk.PodGroupKey(nn.Namespace, *pod.Spec.SchedulingGroup.PodGroupName).String()
 					if entity, exists := p.unschedulableEntities.entityInfoMap[entityKey]; exists && !seen[entityKey] {
 						seen[entityKey] = true
-						// Only preCheck the specific pod identified by PreQueueingHint,
-						// not all members of the PodGroup.
-						if preCheck == nil || preCheck(pod) {
+						if preCheck == nil || preCheck(entity) {
 							entities = append(entities, entity)
 						}
 					}
@@ -1745,13 +1747,9 @@ func (p *PriorityQueue) collectEntitiesToEvaluate(logger klog.Logger, event fwk.
 	// No narrowing — evaluate all unschedulable entities.
 	entities := make([]framework.QueuedEntityInfo, 0, len(p.unschedulableEntities.entityInfoMap))
 	for _, entity := range p.unschedulableEntities.entityInfoMap {
-		entity.ForEachPodInfo(func(pInfo *framework.QueuedPodInfo) bool {
-			if preCheck == nil || preCheck(pInfo.Pod) {
-				entities = append(entities, entity)
-				return false
-			}
-			return true
-		})
+		if preCheck == nil || preCheck(entity) {
+			entities = append(entities, entity)
+		}
 	}
 	return entities, nil
 }
