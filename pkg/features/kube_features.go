@@ -690,12 +690,6 @@ const (
 	// is being pulled to the credential provider plugin.
 	KubeletServiceAccountTokenForCredentialProviders featuregate.Feature = "KubeletServiceAccountTokenForCredentialProviders"
 
-	// owner: @sallyom
-	// kep: https://kep.k8s.io/2832
-	//
-	// Add support for distributed tracing in the kubelet
-	KubeletTracing featuregate.Feature = "KubeletTracing"
-
 	// owner: @RobertKrawitz
 	//
 	// Allow use of filesystems for ephemeral storage monitoring.
@@ -908,12 +902,6 @@ const (
 	// after pod sandbox creation, network configuration, volume mounting, and
 	// (if requested) dynamic resource allocation are complete.
 	PodReadyToStartContainersCondition featuregate.Feature = "PodReadyToStartContainersCondition"
-
-	// owner: @Huang-Wei
-	// kep: https://kep.k8s.io/3521
-	//
-	// Enable users to specify when a Pod is ready for scheduling.
-	PodSchedulingReadiness featuregate.Feature = "PodSchedulingReadiness"
 
 	// owner: @munnerz
 	// kep: https://kep.k8s.io/4742
@@ -1792,12 +1780,6 @@ var defaultVersionedKubernetesFeatureGates = map[featuregate.Feature]featuregate
 		{Version: version.MustParse("1.34"), Default: true, PreRelease: featuregate.Beta},
 	},
 
-	KubeletTracing: {
-		{Version: version.MustParse("1.25"), Default: false, PreRelease: featuregate.Alpha},
-		{Version: version.MustParse("1.27"), Default: true, PreRelease: featuregate.Beta},
-		{Version: version.MustParse("1.34"), Default: true, PreRelease: featuregate.GA, LockToDefault: true}, // remove in 1.37
-	},
-
 	LocalStorageCapacityIsolationFSQuotaMonitoring: {
 		{Version: version.MustParse("1.15"), Default: false, PreRelease: featuregate.Alpha},
 		{Version: version.MustParse("1.31"), Default: false, PreRelease: featuregate.Beta},
@@ -1971,12 +1953,6 @@ var defaultVersionedKubernetesFeatureGates = map[featuregate.Feature]featuregate
 		{Version: version.MustParse("1.28"), Default: false, PreRelease: featuregate.Alpha},
 		{Version: version.MustParse("1.29"), Default: true, PreRelease: featuregate.Beta},
 		{Version: version.MustParse("1.37"), Default: true, PreRelease: featuregate.GA, LockToDefault: true}, // GA in 1.37, remove in 1.40
-	},
-
-	PodSchedulingReadiness: {
-		{Version: version.MustParse("1.26"), Default: false, PreRelease: featuregate.Alpha},
-		{Version: version.MustParse("1.27"), Default: true, PreRelease: featuregate.Beta},
-		{Version: version.MustParse("1.30"), Default: true, PreRelease: featuregate.GA, LockToDefault: true}, // GA in 1.30; remove in 1.32
 	},
 
 	PodTopologyLabelsAdmission: {
@@ -2698,8 +2674,6 @@ var defaultKubernetesFeatureGateDependencies = map[featuregate.Feature][]feature
 
 	KubeletServiceAccountTokenForCredentialProviders: {},
 
-	KubeletTracing: {},
-
 	LocalStorageCapacityIsolationFSQuotaMonitoring: {},
 
 	MatchLabelKeysInPodAffinity: {},
@@ -2767,8 +2741,6 @@ var defaultKubernetesFeatureGateDependencies = map[featuregate.Feature][]feature
 	PodObservedGenerationTracking: {},
 
 	PodReadyToStartContainersCondition: {},
-
-	PodSchedulingReadiness: {},
 
 	PodTopologyLabelsAdmission: {},
 
