@@ -61,13 +61,6 @@ type WatchCacheStorage struct {
 	snapshottingEnabled atomic.Bool
 }
 
-// StoreLocked returns the live store.
-// Unlike GetExactSnapshotLocked this is not an immutable point-in-time copy.
-// The caller must hold the lock for the duration of use.
-func (w *WatchCacheStorage) StoreLocked() Indexer {
-	return w.store
-}
-
 func (w *WatchCacheStorage) SnapshottingEnabled() bool {
 	return w.snapshots != nil && w.snapshottingEnabled.Load()
 }
@@ -114,11 +107,7 @@ func (w *WatchCacheStorage) GetLatestSnapshotOrBuildLocked(key, continueKey stri
 		return snap, nil
 	}
 	// TODO: Consider using Indexer Clone() after benchmarking.
-	return orderedSnapshotResponseFromIndexer(w.store, key, continueKey)
-}
-
-func orderedSnapshotResponseFromIndexer(indexer Indexer, key, continueKey string) (Snapshot, error) {
-	items, err := indexer.OrderedListPrefix(key, continueKey)
+	items, err := w.OrderedListPrefix(key, continueKey)
 	if err != nil {
 		return nil, err
 	}
@@ -261,6 +250,10 @@ func (w *WatchCacheStorage) GetByKey(key string) (interface{}, bool, error) {
 	return w.store.GetByKey(key)
 }
 
+func (w *WatchCacheStorage) OrderedListPrefix(prefix, continueKey string) ([]interface{}, error) {
+	return w.store.OrderedListPrefix(prefix, continueKey)
+}
+
 func (w *WatchCacheStorage) ListKeys() []string {
 	return w.store.ListKeys()
 }
@@ -271,24 +264,25 @@ func (w *WatchCacheStorage) List() []interface{} {
 }
 
 // UpdateStoreLocked executes a mutation (Add, Update, Delete) on the underlying store.
-func (w *WatchCacheStorage) UpdateStoreLocked(eventType watch.EventType, elem *Element, resourceVersion uint64) (err error) {
+// It returns the element that was previously stored under the same key, if any.
+func (w *WatchCacheStorage) UpdateStoreLocked(eventType watch.EventType, elem *Element, resourceVersion uint64) (prev *Element, err error) {
 	switch eventType {
 	case watch.Added:
-		err = w.store.Add(elem)
+		prev, err = w.store.Add(elem)
 	case watch.Modified:
-		err = w.store.Update(elem)
+		prev, err = w.store.Update(elem)
 	case watch.Deleted:
-		err = w.store.Delete(elem)
+		prev, err = w.store.Delete(elem)
 	default:
 		err = fmt.Errorf("unexpected event type: %v", eventType)
 	}
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if w.snapshots != nil && w.snapshottingEnabled.Load() {
 		w.snapshots.Add(resourceVersion, w.store.Clone())
 	}
-	return nil
+	return prev, nil
 }
 
 // CompactSnapshotsLocked prunes snapshots older than the oldest history version.
