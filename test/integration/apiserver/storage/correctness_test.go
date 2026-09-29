@@ -28,7 +28,6 @@ import (
 	"github.com/anishathalye/porcupine"
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/apiserver/pkg/registry/generic"
 	genericregistry "k8s.io/apiserver/pkg/registry/generic/registry"
 	"k8s.io/apiserver/pkg/storage"
@@ -48,7 +47,16 @@ var (
 		Weight: 10,
 	}, {
 		Choice: RequestTypeGet,
-		Weight: 25,
+		Weight: 10,
+	}, {
+		Choice: RequestTypeList,
+		Weight: 5,
+	}, {
+		Choice: RequestTypeListNamespace,
+		Weight: 5,
+	}, {
+		Choice: RequestTypeListNonRecursive,
+		Weight: 5,
 	}, {
 		Choice: RequestTypeUpdate,
 		Weight: 20,
@@ -121,11 +129,12 @@ func TestCorrectness(t *testing.T) {
 
 func testCorrectness(t *testing.T, store storage.Interface, storagePrefix string) {
 	ctx := t.Context()
+	versioner := store.Versioner()
 
 	list := &api.PodList{}
 	err := store.GetList(ctx, "/pods", storage.ListOptions{Recursive: true, Predicate: storage.Everything}, list)
 	require.NoError(t, err)
-	initialState, err := correctness.NewModelFromStorage(storagePrefix, list, func() runtime.Object { return &api.Pod{} }, cacheKeyFunc)
+	initialState, err := correctness.NewModelFromStorage(storagePrefix, list, func() runtime.Object { return &api.Pod{} }, func() runtime.Object { return &api.PodList{} }, cacheKeyFunc, versioner)
 	require.NoError(t, err)
 
 	stopWatches := make(chan struct{})
@@ -169,29 +178,29 @@ func testCorrectness(t *testing.T, store storage.Interface, storagePrefix string
 	linearizations := info.PartialLinearizations()
 	require.Len(t, linearizations, 1, "expected one partition")
 	require.Len(t, linearizations[0], 1, "expected one linearization")
-	expectEvents := eventsFromLinearization(initialState, operations, linearizations[0][0])
-	validator := correctness.NewWatchValidator(store.Versioner(), cacheKeyFunc, expectEvents)
+	history := changesFromLinearization(initialState, operations, linearizations[0][0])
+	validator := correctness.NewWatchValidator(versioner, cacheKeyFunc, history)
 	for _, w := range watches {
 		require.NoError(t, validator.ValidateWatch(w.Request, w.Response))
 	}
 	require.Positive(t, watchEvents, "expected at least one watch event across %d watches", len(watches))
 }
 
-func eventsFromLinearization(initialState *correctness.Model, ops []correctness.Operation, linearization []int) []watch.Event {
+func changesFromLinearization(initialState *correctness.Model, ops []correctness.Operation, linearization []int) []correctness.Change {
 	state := initialState.Clone()
-	var events []watch.Event
+	var changes []correctness.Change
 	for _, i := range linearization {
 		op := ops[i]
-		ok, next, event := state.Step(op.Request, op.Response)
+		ok, next, change := state.Step(op.Request, op.Response)
 		if !ok {
 			panic(fmt.Sprintf("linearized operation %d failed model step", i))
 		}
 		state = next
-		if event != nil {
-			events = append(events, *event)
+		if change != nil {
+			changes = append(changes, *change)
 		}
 	}
-	return events
+	return changes
 }
 
 // ToPorcupineModel maps a correctness.Model to porcupine.Model with an initial state.
