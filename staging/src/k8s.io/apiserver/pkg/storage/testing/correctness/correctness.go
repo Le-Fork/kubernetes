@@ -24,6 +24,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/watch"
@@ -62,6 +63,7 @@ func correctnessTestSteps() []testStep {
 	pod3RV8 := "8"
 	pod3RV9 := "9"
 	pod3RV10 := "10"
+	pod5RV15 := "15"
 	errCustom := fmt.Errorf("user rejected update")
 	listRecursive := ListRequest{Options: storage.ListOptions{Recursive: true, Predicate: storage.Everything}}
 	listNonRecursive := ListRequest{Options: storage.ListOptions{Predicate: storage.Everything}}
@@ -879,6 +881,236 @@ func correctnessTestSteps() []testStep {
 				{Object: nil, Err: nil},
 			},
 		},
+		{
+			Name: "39. Update existing pod4 with ignoreNotFound=true validating ResponseMeta has pod4 RV, not store RV, returns success RV=16",
+			Request: Request{
+				Op:  OpUpdate,
+				Key: pod4Key,
+				Update: UpdateRequest{
+					IgnoreNotFound: true,
+					UpdateFunc: func(input runtime.Object, res storage.ResponseMeta) (runtime.Object, *uint64, error) {
+						// Creating pod5 moved the store to RV 15.
+						if res.ResourceVersion != 14 {
+							return nil, nil, fmt.Errorf("expected ResourceVersion 14, got %d", res.ResourceVersion)
+						}
+						pod := input.(*example.Pod).DeepCopy()
+						pod.Labels = map[string]string{"version": "v1"}
+						return pod, nil, nil
+					},
+				},
+			},
+			CorrectResponse: Response{
+				Object: withLabel(pod4, "16", "version", "v1"),
+			},
+			ExpectedEvent: &watch.Event{
+				Type:   watch.Modified,
+				Object: withLabel(pod4, "16", "version", "v1"),
+			},
+			InvalidResponses: []Response{
+				{Object: withLabel(pod4, "15", "version", "v1")},
+				{Object: withLabel(pod4, "17", "version", "v1")},
+				{Object: nil, Err: nil},
+			},
+		},
+		{
+			Name: "40. Update pod4 with CachedExistingObject and failing UpdateFunc returns user error",
+			Request: Request{
+				Op:  OpUpdate,
+				Key: pod4Key,
+				Update: UpdateRequest{
+					CachedExistingObject: withRV(pod4, "14"),
+					UpdateFunc: func(input runtime.Object, res storage.ResponseMeta) (runtime.Object, *uint64, error) {
+						return nil, nil, errCustom
+					},
+				},
+			},
+			CorrectResponse: Response{
+				Object: nil,
+				Err:    errCustom,
+			},
+			InvalidResponses: []Response{
+				{Object: withLabel(pod4, "16", "version", "v1")},
+				{Object: withLabel(pod4, "17", "version", "v1")},
+				{Object: nil, Err: nil},
+			},
+		},
+		{
+			Name: "41. Update pod4 with stale CachedExistingObject where UpdateFunc fails on stale RV retries and returns success RV=17",
+			Request: Request{
+				Op:  OpUpdate,
+				Key: pod4Key,
+				Update: UpdateRequest{
+					CachedExistingObject: withRV(pod4, "14"),
+					UpdateFunc: func(input runtime.Object, res storage.ResponseMeta) (runtime.Object, *uint64, error) {
+						if res.ResourceVersion != 16 {
+							return nil, nil, fmt.Errorf("expected ResourceVersion 16, got %d", res.ResourceVersion)
+						}
+						pod := input.(*example.Pod).DeepCopy()
+						pod.Labels = map[string]string{"version": "v2"}
+						return pod, nil, nil
+					},
+				},
+			},
+			CorrectResponse: Response{
+				Object: withLabel(pod4, "17", "version", "v2"),
+			},
+			ExpectedEvent: &watch.Event{
+				Type:   watch.Modified,
+				Object: withLabel(pod4, "17", "version", "v2"),
+			},
+			InvalidResponses: []Response{
+				{Object: withLabel(pod4, "16", "version", "v2")},
+				{Object: withLabel(pod4, "18", "version", "v2")},
+				{Object: nil, Err: nil},
+			},
+		},
+		{
+			Name: "42. Delete pod5 with matching ResourceVersion precondition returns success RV=18",
+			Request: Request{
+				Op:     OpDelete,
+				Key:    pod5Key,
+				Delete: DeleteRequest{Preconditions: &storage.Preconditions{ResourceVersion: &pod5RV15}},
+			},
+			CorrectResponse: Response{
+				Object: withRV(pod5, "18"),
+			},
+			ExpectedEvent: &watch.Event{
+				Type:   watch.Deleted,
+				Object: withRV(pod5, "18"),
+			},
+			InvalidResponses: []Response{
+				{Object: &example.Pod{}, Err: storage.NewKeyNotFoundError(pod5Key, 0)},
+				{Object: withRV(pod5, "15")},
+				{Object: withRV(pod5, "17")},
+				{Object: withRV(pod5, "19")},
+				{Object: nil, Err: nil},
+			},
+		},
+		{
+			Name: "43. Get existing pod4 with ignoreNotFound=true returns pod4 RV=17",
+			Request: Request{
+				Op:  OpGet,
+				Key: pod4Key,
+				Get: GetRequest{Options: storage.GetOptions{IgnoreNotFound: true}},
+			},
+			CorrectResponse: Response{
+				Object: withLabel(pod4, "17", "version", "v2"),
+			},
+			InvalidResponses: []Response{
+				{Object: &example.Pod{}},
+				{Object: nil, Err: storage.NewKeyNotFoundError(pod4Key, 0)},
+				{Object: nil, Err: nil},
+			},
+		},
+		{
+			Name: "44. Get deleted pod5 with ignoreNotFound=true returns empty pod",
+			Request: Request{
+				Op:  OpGet,
+				Key: pod5Key,
+				Get: GetRequest{Options: storage.GetOptions{IgnoreNotFound: true}},
+			},
+			CorrectResponse: Response{
+				Object: &example.Pod{},
+			},
+			InvalidResponses: []Response{
+				{Object: withRV(pod5, "15")},
+				{Object: withRV(pod5, "18")},
+				{Object: nil, Err: storage.NewKeyNotFoundError(pod5Key, 0)},
+				{Object: nil, Err: nil},
+			},
+		},
+		{
+			Name: "45. List pods with Exact ResourceVersion=15 returns snapshot at RV=15",
+			Request: Request{
+				Op:  OpList,
+				Key: "/pods/",
+				List: ListRequest{Options: storage.ListOptions{
+					ResourceVersion:      "15",
+					ResourceVersionMatch: metav1.ResourceVersionMatchExact,
+					Recursive:            true,
+					Predicate:            storage.Everything,
+				}},
+			},
+			CorrectResponse: Response{
+				Object: newTestPodList("15", withRV(pod4, "14"), withRV(pod5, "15")),
+			},
+			InvalidResponses: []Response{
+				{Object: newTestPodList("14", withRV(pod4, "14"))},
+				{Object: newTestPodList("16", withLabel(pod4, "16", "version", "v1"), withRV(pod5, "15"))},
+				{Object: newTestPodList("18", withLabel(pod4, "17", "version", "v2"))},
+				{Object: newTestPodList("15", withRV(pod4, "14"))},
+				{Object: newTestPodList("15", withLabel(pod4, "17", "version", "v2"))},
+				{Object: nil, Err: storage.NewTooLargeResourceVersionError(15, 18, 0)},
+				{Object: nil, Err: nil},
+			},
+		},
+		{
+			Name: "46. List pods with NotOlderThan ResourceVersion=15 returns snapshot at RV>=15",
+			Request: Request{
+				Op:  OpList,
+				Key: "/pods/",
+				List: ListRequest{Options: storage.ListOptions{
+					ResourceVersion:      "15",
+					ResourceVersionMatch: metav1.ResourceVersionMatchNotOlderThan,
+					Recursive:            true,
+					Predicate:            storage.Everything,
+				}},
+			},
+			CorrectResponse: Response{
+				Object: newTestPodList("16", withLabel(pod4, "16", "version", "v1"), withRV(pod5, "15")),
+			},
+			InvalidResponses: []Response{
+				{Object: newTestPodList("14", withRV(pod4, "14"))},
+				{Object: newTestPodList("19", withLabel(pod4, "17", "version", "v2"))},
+				{Object: newTestPodList("16", withRV(pod4, "14"), withRV(pod5, "15"))},
+				{Object: nil, Err: storage.NewTooLargeResourceVersionError(15, 18, 0)},
+				{Object: nil, Err: nil},
+			},
+		},
+		{
+			Name: "47. List pods with ResourceVersion=0 returns snapshot at RV>=1",
+			Request: Request{
+				Op:  OpList,
+				Key: "/pods/",
+				List: ListRequest{Options: storage.ListOptions{
+					ResourceVersion: "0",
+					Recursive:       true,
+					Predicate:       storage.Everything,
+				}},
+			},
+			CorrectResponse: Response{
+				Object: newTestPodList("14", withRV(pod4, "14")),
+			},
+			InvalidResponses: []Response{
+				{Object: newTestPodList("0")},
+				{Object: newTestPodList("19", withLabel(pod4, "17", "version", "v2"))},
+				{Object: newTestPodList("15", withRV(pod4, "14"))},
+				{Object: nil, Err: nil},
+			},
+		},
+		{
+			Name: "48. List pods with future ResourceVersion=99 returns TooLargeResourceVersionError",
+			Request: Request{
+				Op:  OpList,
+				Key: "/pods/",
+				List: ListRequest{Options: storage.ListOptions{
+					ResourceVersion:      wrongRV,
+					ResourceVersionMatch: metav1.ResourceVersionMatchNotOlderThan,
+					Recursive:            true,
+					Predicate:            storage.Everything,
+				}},
+			},
+			CorrectResponse: Response{
+				Object: nil,
+				Err:    storage.NewTooLargeResourceVersionError(99, 18, 0),
+			},
+			InvalidResponses: []Response{
+				{Object: newTestPodList("18", withLabel(pod4, "17", "version", "v2"))},
+				{Object: newTestPodList("99", withLabel(pod4, "17", "version", "v2"))},
+				{Object: nil, Err: storage.NewKeyNotFoundError("/pods/", 0)},
+				{Object: nil, Err: nil},
+			},
+		},
 	}
 }
 
@@ -886,14 +1118,15 @@ func correctnessTestSteps() []testStep {
 // and validates that every transition matches the StorageModel specification.
 func RunTestCorrectness(ctx context.Context, t *testing.T, store storage.Interface, storagePrefix string, keyFunc func(obj runtime.Object) (string, error)) {
 	versioner := store.Versioner()
-	model := NewEmptyModel(storagePrefix, func() runtime.Object { return &example.Pod{} }, func() runtime.Object { return &example.PodList{} }, versioner)
+	initialState := NewEmptyModel(storagePrefix, func() runtime.Object { return &example.Pod{} }, func() runtime.Object { return &example.PodList{} }, versioner)
+	model := initialState.Clone()
 
 	watchRequest := WatchRequest{ResourceVersion: "1"}
 	watcher, err := store.Watch(ctx, "/pods/", storage.ListOptions{ResourceVersion: watchRequest.ResourceVersion, Predicate: storage.Everything, Recursive: true})
 	require.NoError(t, err)
 	defer watcher.Stop()
 
-	var history []Change
+	var operations []Operation
 	for _, step := range correctnessTestSteps() {
 		var out runtime.Object = &example.Pod{}
 		var err error
@@ -917,7 +1150,7 @@ func RunTestCorrectness(ctx context.Context, t *testing.T, store storage.Interfa
 			respObj = out
 		}
 		resp := Response{Object: respObj, Err: err}
-		ok, next, change := model.Step(step.Request, resp)
+		ok, next, _ := model.Step(step.Request, resp)
 		if respObj != nil {
 			acc, _ := meta.CommonAccessor(respObj)
 			t.Logf("Step: %s, State RV before: %d, Response RV: %s, Obj: %+v, err: %v", step.Name, model.ResourceVersion, acc.GetResourceVersion(), respObj, err)
@@ -925,25 +1158,33 @@ func RunTestCorrectness(ctx context.Context, t *testing.T, store storage.Interfa
 			t.Logf("Step: %s, State RV before: %d, Response Err: %v", step.Name, model.ResourceVersion, err)
 		}
 		require.True(t, ok, "step %s failed to match model state transition: req=%+v resp=%+v", step.Name, step.Request, resp)
+		operations = append(operations, Operation{Request: step.Request, Response: resp})
 		model = next
-		if change != nil {
-			history = append(history, *change)
-		}
+	}
+
+	replay, err := NewReplay(initialState, operations)
+	require.NoError(t, err)
+	for _, op := range operations {
+		require.NoError(t, replay.Validate(op.Request, op.Response))
 	}
 
 	gotEvents := collectEventsTillRV(t, watcher, versioner, model.ResourceVersion)
-	validator := NewWatchValidator(versioner, keyFunc, history)
+	validator := NewWatchValidator(versioner, replay, keyFunc)
 	require.NoError(t, validator.ValidateWatch(watchRequest, WatchResponse{Events: gotEvents}))
 }
 
 func collectEventsTillRV(t *testing.T, watcher watch.Interface, versioner storage.Versioner, targetRV uint64) []watch.Event {
 	events := []watch.Event{}
 	for e := range watcher.ResultChan() {
-		require.NotEqual(t, watch.Error, e.Type)
 		if cacheable, ok := e.Object.(runtime.CacheableObject); ok {
 			e.Object = cacheable.GetObject()
 		}
 		events = append(events, e)
+		if e.Type == watch.Error {
+			_, open := <-watcher.ResultChan()
+			require.False(t, open, "watch channel should be closed after watch.Error")
+			break
+		}
 		accessor, err := meta.Accessor(e.Object)
 		require.NoError(t, err)
 		rv, err := versioner.ParseResourceVersion(accessor.GetResourceVersion())
