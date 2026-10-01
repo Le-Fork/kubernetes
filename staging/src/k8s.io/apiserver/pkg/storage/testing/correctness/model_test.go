@@ -64,4 +64,19 @@ func TestCorrectness(t *testing.T) {
 		})
 	}
 	require.Equal(t, expectEvents, gotEvents)
+
+	validator := NewWatchValidator(versioner, replay, getKey)
+	for _, tc := range watchTestCases() {
+		t.Run(tc.Name, func(t *testing.T) {
+			if tc.ExpectError != nil {
+				require.NoError(t, validator.ValidateWatch(tc.Request, WatchResponse{Err: tc.ExpectError}))
+				return
+			}
+			requestedRV, err := versioner.ParseResourceVersion(tc.Request.Options.ResourceVersion)
+			require.NoError(t, err)
+			events, err := replay.Events(tc.Request, &ResourceVersionRange{Min: requestedRV + 1, Max: model.ResourceVersion + 1})
+			require.NoError(t, err)
+			require.NoError(t, validator.ValidateWatch(tc.Request, WatchResponse{Events: events}))
+		})
+	}
 }

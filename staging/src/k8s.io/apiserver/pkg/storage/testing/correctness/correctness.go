@@ -23,6 +23,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -59,6 +60,7 @@ func correctnessTestSteps() []testStep {
 	pod4Key := mustGetKey(pod4)
 	pod5Key := mustGetKey(pod5)
 	wrongRV := "99"
+	_, invalidRVErr := storage.APIObjectVersioner{}.ParseResourceVersion("abc")
 	pod2RV := "3"
 	pod3RV8 := "8"
 	pod3RV9 := "9"
@@ -1111,6 +1113,210 @@ func correctnessTestSteps() []testStep {
 				{Object: nil, Err: nil},
 			},
 		},
+		{
+			Name: "49. Create pod1 with ResourceVersion set returns ErrResourceVersionSetOnCreate",
+			Request: Request{
+				Op:     OpCreate,
+				Key:    pod1Key,
+				Create: CreateRequest{Object: withRV(pod1, "5")},
+			},
+			CorrectResponse: Response{Err: storage.ErrResourceVersionSetOnCreate},
+			InvalidResponses: []Response{
+				{Object: withRV(pod1, "19")},
+				{Object: nil, Err: nil},
+			},
+		},
+		{
+			Name: "50. Create with empty key returns empty key error",
+			Request: Request{
+				Op:     OpCreate,
+				Key:    "",
+				Create: CreateRequest{Object: pod1},
+			},
+			CorrectResponse: Response{Err: fmt.Errorf("empty key: %q", "")},
+			InvalidResponses: []Response{
+				{Object: withRV(pod1, "19")},
+				{Object: nil, Err: nil},
+			},
+		},
+		{
+			Name: "51. Get with key escaping the prefix returns invalid key error",
+			Request: Request{
+				Op:  OpGet,
+				Key: "/pods/../secrets/s1",
+			},
+			CorrectResponse: Response{Err: fmt.Errorf("invalid key: %q", "/pods/../secrets/s1")},
+			InvalidResponses: []Response{
+				{Object: nil, Err: storage.NewKeyNotFoundError("/pods/../secrets/s1", 0)},
+				{Object: nil, Err: nil},
+			},
+		},
+		{
+			Name: "52. Update with key containing . returns invalid key error",
+			Request: Request{
+				Op:  OpUpdate,
+				Key: "/pods/./ns1/pod4",
+				Update: UpdateRequest{
+					UpdateFunc: storage.SimpleUpdate(func(obj runtime.Object) (runtime.Object, error) { return obj, nil }),
+				},
+			},
+			CorrectResponse: Response{Err: fmt.Errorf("invalid key: %q", "/pods/./ns1/pod4")},
+			InvalidResponses: []Response{
+				{Object: nil, Err: storage.NewKeyNotFoundError("/pods/./ns1/pod4", 18)},
+				{Object: nil, Err: nil},
+			},
+		},
+		{
+			Name: "53. Delete with key / returns empty key error",
+			Request: Request{
+				Op:  OpDelete,
+				Key: "/",
+			},
+			CorrectResponse: Response{Err: fmt.Errorf("empty key: %q", "/")},
+			InvalidResponses: []Response{
+				{Object: nil, Err: storage.NewKeyNotFoundError("/", 18)},
+				{Object: nil, Err: nil},
+			},
+		},
+		{
+			Name: "54. List with key ending with .. returns invalid key error",
+			Request: Request{
+				Op:   OpList,
+				Key:  "/pods/..",
+				List: listRecursive,
+			},
+			CorrectResponse: Response{Err: fmt.Errorf("invalid key: %q", "/pods/..")},
+			InvalidResponses: []Response{
+				{Object: newTestPodList("18", withLabel(pod4, "17", "version", "v2"))},
+				{Object: nil, Err: nil},
+			},
+		},
+		{
+			Name: "55. List with unparsable ResourceVersion returns bad request",
+			Request: Request{
+				Op:  OpList,
+				Key: "/pods/",
+				List: ListRequest{Options: storage.ListOptions{
+					ResourceVersion: "abc",
+					Recursive:       true,
+					Predicate:       storage.Everything,
+				}},
+			},
+			CorrectResponse: Response{Err: apierrors.NewBadRequest(fmt.Sprintf("invalid resource version: %v", invalidRVErr))},
+			InvalidResponses: []Response{
+				{Object: newTestPodList("18", withLabel(pod4, "17", "version", "v2"))},
+				{Object: nil, Err: nil},
+			},
+		},
+		{
+			Name: "56. List with unknown ResourceVersionMatch returns error",
+			Request: Request{
+				Op:  OpList,
+				Key: "/pods/",
+				List: ListRequest{Options: storage.ListOptions{
+					ResourceVersion:      "15",
+					ResourceVersionMatch: "Newest",
+					Recursive:            true,
+					Predicate:            storage.Everything,
+				}},
+			},
+			CorrectResponse: Response{Err: fmt.Errorf("unknown ResourceVersionMatch value: %v", "Newest")},
+			InvalidResponses: []Response{
+				{Object: newTestPodList("18", withLabel(pod4, "17", "version", "v2"))},
+				{Object: nil, Err: nil},
+			},
+		},
+	}
+}
+
+type watchTestCase struct {
+	Name        string
+	Request     WatchRequest
+	ExpectError error
+}
+
+func watchTestCases() []watchTestCase {
+	_, invalidRVErr := storage.APIObjectVersioner{}.ParseResourceVersion("abc")
+	return []watchTestCase{
+		{
+			Name:    "Watch everything",
+			Request: WatchRequest{Key: "/pods/", Options: storage.ListOptions{ResourceVersion: "", Predicate: storage.Everything, Recursive: true, SendInitialEvents: new(false)}},
+		},
+		{
+			Name:    "Watch everything with NotOlderThan",
+			Request: WatchRequest{Key: "/pods/", Options: storage.ListOptions{ResourceVersion: "", ResourceVersionMatch: metav1.ResourceVersionMatchNotOlderThan, Predicate: storage.Everything, Recursive: true, SendInitialEvents: new(false)}},
+		},
+		{
+			Name:    "Watch everything with ResourceVersion=0",
+			Request: WatchRequest{Key: "/pods/", Options: storage.ListOptions{ResourceVersion: "0", Predicate: storage.Everything, Recursive: true, SendInitialEvents: new(false)}},
+		},
+		{
+			Name:    "Watch everything with ResourceVersion=0 and NotOlderThan",
+			Request: WatchRequest{Key: "/pods/", Options: storage.ListOptions{ResourceVersion: "0", ResourceVersionMatch: metav1.ResourceVersionMatchNotOlderThan, Predicate: storage.Everything, Recursive: true, SendInitialEvents: new(false)}},
+		},
+		{
+			Name:    "Watch everything with ResourceVersion=1",
+			Request: WatchRequest{Key: "/pods/", Options: storage.ListOptions{ResourceVersion: "1", Predicate: storage.Everything, Recursive: true, SendInitialEvents: new(false)}},
+		},
+		{
+			Name:    "Watch everything with ResourceVersion=1 and Exact",
+			Request: WatchRequest{Key: "/pods/", Options: storage.ListOptions{ResourceVersion: "1", ResourceVersionMatch: metav1.ResourceVersionMatchExact, Predicate: storage.Everything, Recursive: true, SendInitialEvents: new(false)}},
+		},
+		{
+			Name:    "Watch everything with ResourceVersion=1 and NotOlderThan",
+			Request: WatchRequest{Key: "/pods/", Options: storage.ListOptions{ResourceVersion: "1", ResourceVersionMatch: metav1.ResourceVersionMatchNotOlderThan, Predicate: storage.Everything, Recursive: true, SendInitialEvents: new(false)}},
+		},
+		{
+			Name:    "Watch everything with ResourceVersion=8",
+			Request: WatchRequest{Key: "/pods/", Options: storage.ListOptions{ResourceVersion: "8", Predicate: storage.Everything, Recursive: true, SendInitialEvents: new(false)}},
+		},
+		{
+			Name:    "Watch everything with ResourceVersion=8 and Exact",
+			Request: WatchRequest{Key: "/pods/", Options: storage.ListOptions{ResourceVersion: "8", ResourceVersionMatch: metav1.ResourceVersionMatchExact, Predicate: storage.Everything, Recursive: true, SendInitialEvents: new(false)}},
+		},
+		{
+			Name:    "Watch everything with ResourceVersion=8 and NotOlderThan",
+			Request: WatchRequest{Key: "/pods/", Options: storage.ListOptions{ResourceVersion: "8", ResourceVersionMatch: metav1.ResourceVersionMatchNotOlderThan, Predicate: storage.Everything, Recursive: true, SendInitialEvents: new(false)}},
+		},
+		{
+			Name:    "Watch on namespace ns1 with ResourceVersion=1",
+			Request: WatchRequest{Key: "/pods/ns1/", Options: storage.ListOptions{ResourceVersion: "1", Predicate: storage.Everything, Recursive: true, SendInitialEvents: new(false)}},
+		},
+		{
+			Name:    "Watch on namespace ns1 with ResourceVersion=1 and Exact",
+			Request: WatchRequest{Key: "/pods/ns1/", Options: storage.ListOptions{ResourceVersion: "1", ResourceVersionMatch: metav1.ResourceVersionMatchExact, Predicate: storage.Everything, Recursive: true}},
+		},
+		{
+			Name:    "Watch on namespace ns1 with ResourceVersion=1 and NotOlderThan",
+			Request: WatchRequest{Key: "/pods/ns1/", Options: storage.ListOptions{ResourceVersion: "1", ResourceVersionMatch: metav1.ResourceVersionMatchNotOlderThan, SendInitialEvents: new(false), Predicate: storage.Everything, Recursive: true}},
+		},
+		{
+			Name:    "Watch on namespace ns10 with ResourceVersion=1",
+			Request: WatchRequest{Key: "/pods/ns10/", Options: storage.ListOptions{ResourceVersion: "1", Predicate: storage.Everything, Recursive: true, SendInitialEvents: new(false)}},
+		},
+		{
+			Name:    "Watch on namespace ns10 with ResourceVersion=1 and Exact",
+			Request: WatchRequest{Key: "/pods/ns10/", Options: storage.ListOptions{ResourceVersion: "1", ResourceVersionMatch: metav1.ResourceVersionMatchExact, Predicate: storage.Everything, Recursive: true}},
+		},
+		{
+			Name:    "Watch on namespace ns10 with ResourceVersion=1 and NotOlderThan",
+			Request: WatchRequest{Key: "/pods/ns10/", Options: storage.ListOptions{ResourceVersion: "1", ResourceVersionMatch: metav1.ResourceVersionMatchNotOlderThan, SendInitialEvents: new(false), Predicate: storage.Everything, Recursive: true}},
+		},
+		{
+			Name:        "Watch with empty key returns empty key error",
+			Request:     WatchRequest{Key: "", Options: storage.ListOptions{ResourceVersion: "1", Predicate: storage.Everything, Recursive: true}},
+			ExpectError: fmt.Errorf("empty key: %q", ""),
+		},
+		{
+			Name:        "Watch with key escaping the prefix returns invalid key error",
+			Request:     WatchRequest{Key: "/pods/../secrets", Options: storage.ListOptions{ResourceVersion: "1", Predicate: storage.Everything, Recursive: true}},
+			ExpectError: fmt.Errorf("invalid key: %q", "/pods/../secrets"),
+		},
+		{
+			Name:        "Watch with unparsable ResourceVersion returns invalid error",
+			Request:     WatchRequest{Key: "/pods/", Options: storage.ListOptions{ResourceVersion: "abc", Predicate: storage.Everything, Recursive: true}},
+			ExpectError: invalidRVErr,
+		},
 	}
 }
 
@@ -1121,10 +1327,20 @@ func RunTestCorrectness(ctx context.Context, t *testing.T, store storage.Interfa
 	initialState := NewEmptyModel(storagePrefix, func() runtime.Object { return &example.Pod{} }, func() runtime.Object { return &example.PodList{} }, versioner)
 	model := initialState.Clone()
 
-	watchRequest := WatchRequest{ResourceVersion: "1"}
-	watcher, err := store.Watch(ctx, "/pods/", storage.ListOptions{ResourceVersion: watchRequest.ResourceVersion, Predicate: storage.Everything, Recursive: true})
-	require.NoError(t, err)
-	defer watcher.Stop()
+	watchCases := watchTestCases()
+	watches := make([]watch.Interface, len(watchCases))
+	watchErrs := make([]error, len(watchCases))
+	for i, tc := range watchCases {
+		w, err := store.Watch(ctx, tc.Request.Key, tc.Request.Options)
+		watches[i] = w
+		watchErrs[i] = err
+		if tc.ExpectError != nil {
+			require.EqualError(t, err, tc.ExpectError.Error(), "step %s", tc.Name)
+			continue
+		}
+		require.NoError(t, err, "step %s", tc.Name)
+		t.Cleanup(w.Stop)
+	}
 
 	var operations []Operation
 	for _, step := range correctnessTestSteps() {
@@ -1168,9 +1384,18 @@ func RunTestCorrectness(ctx context.Context, t *testing.T, store storage.Interfa
 		require.NoError(t, replay.Validate(op.Request, op.Response))
 	}
 
-	gotEvents := collectEventsTillRV(t, watcher, versioner, model.ResourceVersion)
 	validator := NewWatchValidator(versioner, replay, keyFunc)
-	require.NoError(t, validator.ValidateWatch(watchRequest, WatchResponse{Events: gotEvents}))
+	for i, w := range watchCases {
+		var resp WatchResponse
+		if watchErrs[i] != nil {
+			resp = WatchResponse{Err: watchErrs[i]}
+		} else {
+			targetRV, err := replay.LastWatchRV(w.Request)
+			require.NoError(t, err, "step %s", w.Name)
+			resp = WatchResponse{Events: collectEventsTillRV(t, watches[i], versioner, targetRV)}
+		}
+		require.NoError(t, validator.ValidateWatch(w.Request, resp), "step %s", w.Name)
+	}
 }
 
 func collectEventsTillRV(t *testing.T, watcher watch.Interface, versioner storage.Versioner, targetRV uint64) []watch.Event {

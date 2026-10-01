@@ -94,7 +94,10 @@ func (r *Replay) Events(request WatchRequest, rvRange *ResourceVersionRange) ([]
 		if change.ResourceVersion < rvRange.Min || change.ResourceVersion >= rvRange.Max {
 			continue
 		}
-		watchEvent, err := change.toWatchEvent(r.versioner, request.Predicate)
+		if !keyInScope(request.Key, request.Options.Recursive, change.Key) {
+			continue
+		}
+		watchEvent, err := change.toWatchEvent(r.versioner, request.Options.Predicate)
 		if err != nil {
 			return nil, err
 		}
@@ -103,4 +106,21 @@ func (r *Replay) Events(request WatchRequest, rvRange *ResourceVersionRange) ([]
 		}
 	}
 	return filtered, nil
+}
+
+func (r *Replay) LastWatchRV(request WatchRequest) (uint64, error) {
+	for i := len(r.changes) - 1; i >= 0; i-- {
+		change := r.changes[i]
+		if !keyInScope(request.Key, request.Options.Recursive, change.Key) {
+			continue
+		}
+		watchEvent, err := change.toWatchEvent(r.versioner, request.Options.Predicate)
+		if err != nil {
+			return 0, err
+		}
+		if watchEvent != nil {
+			return change.ResourceVersion, nil
+		}
+	}
+	return 0, nil
 }
