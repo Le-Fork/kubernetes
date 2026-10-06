@@ -106,6 +106,12 @@ func (s *Model) Equal(other *Model) bool {
 // Step applies an operation to the sequential state machine. change is the
 // write the operation made, or nil if the operation didn't write.
 func (s *Model) Step(input Request, output Response) (ok bool, next *Model, change *Change) {
+	if input.Op == OpGet && input.Get.Options.ResourceVersion != "" {
+		if err := s.checkGet(input.Key, input.Get.Options); err != nil {
+			return reflect.DeepEqual(Response{Err: err}, output), s, nil
+		}
+		return s.validateGetRV(input.Key, input.Get.Options, output), s, nil
+	}
 	if input.Op == OpList && input.List.Options.ResourceVersion != "" {
 		if err := s.checkList(input.Key, input.List.Options); err != nil {
 			return reflect.DeepEqual(Response{Err: err}, output), s, nil
@@ -133,6 +139,16 @@ func (s *Model) execute(input Request) (Response, *Model, *Change) {
 		resp, change := next.delete(context.Background(), input.Key, input.Delete.Preconditions, nil)
 		return resp, next, change
 	case OpGet:
+		if err := s.checkGet(input.Key, input.Get.Options); err != nil {
+			return Response{Err: err}, s, nil
+		}
+		if input.Get.Options.ResourceVersion != "" {
+			// checkGet already rejected unparsable RVs.
+			rv, _ := s.Versioner.ParseResourceVersion(input.Get.Options.ResourceVersion)
+			if rv > s.ResourceVersion {
+				return Response{Err: storage.NewTooLargeResourceVersionError(rv, s.ResourceVersion, 0)}, s, nil
+			}
+		}
 		return s.get(input.Key, input.Get.Options), s, nil
 	case OpList:
 		return s.list(input.Key, input.List.Options), s, nil
@@ -143,6 +159,47 @@ func (s *Model) execute(input Request) (Response, *Model, *Change) {
 	default:
 		panic(fmt.Sprintf("unknown operation %q", input.Op))
 	}
+}
+
+func (s *Model) checkGet(key string, opts storage.GetOptions) error {
+	if err := checkKey(key, false); err != nil {
+		return err
+	}
+	if _, err := s.Versioner.ParseResourceVersion(opts.ResourceVersion); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Model) validateGetRV(key string, opts storage.GetOptions, output Response) bool {
+	reqRV, err := s.Versioner.ParseResourceVersion(opts.ResourceVersion)
+	if err != nil {
+		return false
+	}
+	if output.Err != nil {
+		if storage.IsTooLargeResourceVersion(output.Err) {
+			return output.Object == nil && reqRV > s.ResourceVersion
+		}
+		if storageErr, ok := output.Err.(*storage.StorageError); ok && storageErr.Code == storage.ErrCodeKeyNotFound {
+			errRV := uint64(storageErr.ResourceVersion)
+			// Cacher returns NotFound errors without the underlying etcd prefix.
+			return !opts.IgnoreNotFound && storageErr.ResourceVersion > 0 && errRV >= reqRV && errRV <= s.ResourceVersion &&
+				(reflect.DeepEqual(output, Response{Err: storage.NewKeyNotFoundError(s.Prefix+key, storageErr.ResourceVersion)}) ||
+					reflect.DeepEqual(output, Response{Err: storage.NewKeyNotFoundError(key, storageErr.ResourceVersion)}))
+		}
+		return false
+	}
+	if output.Object == nil || reqRV > s.ResourceVersion {
+		return false
+	}
+	respRV, err := s.Versioner.ObjectResourceVersion(output.Object)
+	if err != nil {
+		return false
+	}
+	if respRV == 0 {
+		return opts.IgnoreNotFound && reflect.DeepEqual(output.Object, s.NewFunc())
+	}
+	return respRV <= s.ResourceVersion
 }
 
 // checkList returns the error storage returns for an invalid list and panics
@@ -166,9 +223,6 @@ func (s *Model) checkList(key string, opts storage.ListOptions) error {
 	}
 	if opts.RecordTimestamps {
 		panic("recordTimestamps is not supported, it wraps objects in storage-internal types")
-	}
-	if !opts.Predicate.Empty() {
-		panic("label and field selectors are not supported, the model doesn't filter lists")
 	}
 	return nil
 }
@@ -305,15 +359,6 @@ func (s *Model) create(key string, obj runtime.Object) (Response, *Change) {
 }
 
 func (s *Model) get(key string, opts storage.GetOptions) Response {
-	if err := checkKey(key, false); err != nil {
-		return Response{Err: err}
-	}
-	if _, err := s.Versioner.ParseResourceVersion(opts.ResourceVersion); err != nil {
-		return Response{Err: err}
-	}
-	if opts.ResourceVersion != "" {
-		panic("get with resourceVersion is not supported, the model only serves the latest state")
-	}
 	stored, exists := s.Items[key]
 	if !exists {
 		if opts.IgnoreNotFound {
@@ -328,11 +373,9 @@ func (s *Model) list(key string, opts storage.ListOptions) Response {
 	if err := s.checkList(key, opts); err != nil {
 		return Response{Err: err}
 	}
-	var items []runtime.Object
-	for _, k := range slices.Sorted(maps.Keys(s.Items)) {
-		if keyInScope(key, opts.Recursive, k) {
-			items = append(items, s.Items[k].DeepCopyObject())
-		}
+	items, err := s.listItems(key, opts)
+	if err != nil {
+		return Response{Err: err}
 	}
 	list := s.NewListFunc()
 	if err := meta.SetList(list, items); err != nil {
@@ -342,6 +385,24 @@ func (s *Model) list(key string, opts storage.ListOptions) Response {
 		return Response{Object: nil, Err: err}
 	}
 	return Response{Object: list, Err: nil}
+}
+
+func (s *Model) listItems(key string, opts storage.ListOptions) ([]runtime.Object, error) {
+	var items []runtime.Object
+	for _, k := range slices.Sorted(maps.Keys(s.Items)) {
+		if !keyInScope(key, opts.Recursive, k) {
+			continue
+		}
+		obj := s.Items[k]
+		matches, err := opts.Predicate.Matches(obj)
+		if err != nil {
+			return nil, err
+		}
+		if matches {
+			items = append(items, obj.DeepCopyObject())
+		}
+	}
+	return items, nil
 }
 
 // keyInScope reports whether k is selected by a list or watch on key.
@@ -359,22 +420,16 @@ func checkKey(key string, recursive bool) error {
 }
 
 func (s *Model) initialEvents(request WatchRequest) ([]watch.Event, error) {
+	items, err := s.listItems(request.Key, request.Options)
+	if err != nil {
+		return nil, err
+	}
 	var events []watch.Event
-	for _, k := range slices.Sorted(maps.Keys(s.Items)) {
-		if !keyInScope(request.Key, request.Options.Recursive, k) {
-			continue
-		}
-		obj := s.Items[k]
-		matches, err := request.Options.Predicate.Matches(obj)
-		if err != nil {
-			return nil, err
-		}
-		if matches {
-			events = append(events, watch.Event{
-				Type:   watch.Added,
-				Object: obj.DeepCopyObject(),
-			})
-		}
+	for _, obj := range items {
+		events = append(events, watch.Event{
+			Type:   watch.Added,
+			Object: obj,
+		})
 	}
 	return events, nil
 }
