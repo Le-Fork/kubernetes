@@ -440,12 +440,12 @@ func ParseQuantity(str string) (Quantity, error) {
 
 	// So that no one but us has to think about suffixes, remove it.
 	if base == 10 {
-		if exponent == math.MinInt32 {
-			// inf.Dec negates the scale to apply it, which this value
-			// cannot survive, so the quantity has no representation here.
+		exponentInfScale, canInfScale := Scale(exponent).infScale()
+		if !canInfScale {
 			return Quantity{}, ErrSuffix
 		}
-		amount.SetScale(amount.Scale() + Scale(exponent).infScale())
+		// TODO: handle scale addition overflow
+		amount.SetScale(amount.Scale() + exponentInfScale)
 	} else if base == 2 {
 		// numericSuffix = 2 ** exponent
 		numericSuffix := big.NewInt(1).Lsh(bigOne, uint(exponent))
@@ -464,7 +464,7 @@ func ParseQuantity(str string) (Quantity, error) {
 	// of an amount.  Arguably, this should be inf.RoundHalfUp (normal rounding), but that would have
 	// the side effect of rounding values < .5n to zero.
 	if v, ok := amount.Unscaled(); v != int64(0) || !ok {
-		amount.Round(amount, Nano.infScale(), inf.RoundUp)
+		amount.Round(amount, nanoInfScale, inf.RoundUp)
 	}
 
 	// The max is just a simple cap.
@@ -693,8 +693,15 @@ func (q *Quantity) Sign() int {
 	return q.i.Sign()
 }
 
-// AsScale returns the current value, rounded up to the provided scale, and returns
-// false if the scale resulted in a loss of precision.
+// AsScale returns the current value, rounded away from zero to set a minimum
+// scale, and returns false if the scale resulted in a loss of precision.
+//
+// For example:
+//   - (1.1e5).AsScale(3) returns 1.1e5, true
+//   - (1.1e5).AsScale(4) returns 1.1e5, true
+//   - (1.1e5).AsScale(5) returns 2e5, false
+//   - (1.1e5).AsScale(6) returns 1e6, false
+//   - (-1.1e5).AsScale(5) returns -2e5, false
 func (q *Quantity) AsScale(scale Scale) (CanonicalValue, bool) {
 	if q.d.Dec != nil {
 		return q.d.AsScale(scale)
@@ -735,6 +742,9 @@ func (q *Quantity) widenedScale() widenedScale {
 // Add adds the provide y quantity to the current value. If the current value is zero,
 // the format of the quantity will be updated to the format of y.
 //
+// If non-zero operand values are more than 29 orders of magnitude apart, the finer-grained
+// operand is rounded away from zero before the values are summed.
+//
 // This function is unsafe to call concurrently with method calls from other
 // goroutines (even to read-only methods).
 func (q *Quantity) Add(y Quantity) {
@@ -750,11 +760,14 @@ func (q *Quantity) Add(y Quantity) {
 		q.Format = y.Format
 	}
 	q.ToDec()
-	q.d.Dec = new(inf.Dec).Add(q.d.Dec, y.internalReadOnlyDec())
+	q.d.Dec = addDecBoundedScale(q.d.Dec, y.internalReadOnlyDec())
 }
 
 // Sub subtracts the provided quantity from the current value in place. If the current
 // value is zero, the format of the quantity will be updated to the format of y.
+//
+// If non-zero operand values are more than 29 orders of magnitude apart, the finer-grained
+// operand is rounded away from zero before the values are subtracted.
 //
 // This function is unsafe to call concurrently with method calls from other
 // goroutines (even to read-only methods).
@@ -775,7 +788,7 @@ func (q *Quantity) Sub(y Quantity) {
 		return
 	}
 	q.ToDec()
-	q.d.Dec = new(inf.Dec).Sub(q.d.Dec, y.internalReadOnlyDec())
+	q.d.Dec = subDecBoundedScale(q.d.Dec, y.internalReadOnlyDec())
 }
 
 // Mul multiplies the provided y to the current value.

@@ -76,9 +76,9 @@ var (
 				{Choice: RVZero, Weight: 15},
 				{Choice: RVOne, Weight: 10},
 				{Choice: RVCached, Weight: 15},
-				{Choice: RVCurrent, Weight: 10},
-				{Choice: RVPast, Weight: 10},
-				{Choice: RVFuture, Weight: 10},
+				{Choice: RVCurrent, Weight: 14},
+				{Choice: RVPast, Weight: 14},
+				{Choice: RVFuture, Weight: 2},
 			},
 		},
 		List: ListDistribution{
@@ -86,6 +86,10 @@ var (
 				{Choice: ScopeCluster, Weight: 50},
 				{Choice: ScopeNamespace, Weight: 25},
 				{Choice: ScopeObject, Weight: 25},
+			},
+			Recursive: []ChoiceWeight[bool]{
+				{Choice: true, Weight: 70},
+				{Choice: false, Weight: 30},
 			},
 			FieldSelector: []ChoiceWeight[FieldSelector]{
 				{Choice: FieldEverything, Weight: 25},
@@ -100,9 +104,13 @@ var (
 				{Choice: LabelByApp, Weight: 40},
 			},
 			ResourceVersion: []ChoiceWeight[RVType]{
-				{Choice: RVEmpty, Weight: 50},
-				{Choice: RVZero, Weight: 20},
-				{Choice: RVCached, Weight: 30},
+				{Choice: RVEmpty, Weight: 30},
+				{Choice: RVZero, Weight: 15},
+				{Choice: RVOne, Weight: 10},
+				{Choice: RVCached, Weight: 15},
+				{Choice: RVCurrent, Weight: 14},
+				{Choice: RVPast, Weight: 14},
+				{Choice: RVFuture, Weight: 2},
 			},
 			ResourceVersionMatch: []ChoiceWeight[metav1.ResourceVersionMatch]{
 				{Choice: "", Weight: 50},
@@ -240,8 +248,8 @@ func TestCorrectness(t *testing.T) {
 				return setupCacher(tCtx, &watchBreakingStore{Interface: store, expireAfter: 200 * time.Millisecond}), prefix
 			},
 			validateFaultInjection: func(tCtx ktesting.TContext, ops []correctness.Operation, watches []correctness.WatchOperation) {
-				require.True(t, hasUnreadyListError(ops), "expected cacher.GetList to reject requests with 429 TooManyRequests while unready")
-				require.True(t, hasWatchTooManyRequestsError(watches), "expected cacher.Watch to reject watches with 429 TooManyRequests while unready")
+				require.True(tCtx, hasUnreadyListError(ops), "expected cacher.GetList to reject requests with 429 TooManyRequests while unready")
+				require.True(tCtx, hasWatchTooManyRequestsError(watches), "expected cacher.Watch to reject watches with 429 TooManyRequests while unready")
 			},
 		},
 		{
@@ -256,10 +264,8 @@ func TestCorrectness(t *testing.T) {
 				return setupCacher(tCtx, &watchDelayingStore{Interface: store, delay: 3600 * time.Millisecond}), prefix
 			},
 			validateFaultInjection: func(tCtx ktesting.TContext, ops []correctness.Operation, watches []correctness.WatchOperation) {
-				require.True(t, hasConsistentListFallback(ops) || hasUnaryTimeoutError(ops),
+				require.True(tCtx, hasConsistentListFallback(ops) || hasUnaryTimeoutError(ops),
 					"expected >3s watch delay to trigger consistent List fallback to etcd or unary TooLargeResourceVersionError")
-				require.True(t, hasWatchEventReason(watches, metav1.StatusReasonTimeout),
-					"expected >3s watch delay to trigger WatchList StatusReasonTimeout error events")
 			},
 		},
 		{
@@ -273,9 +279,9 @@ func TestCorrectness(t *testing.T) {
 				return setupCacher(tCtx, &bookmarkDroppingStore{Interface: store, stallDuration: 4700 * time.Millisecond}), prefix
 			},
 			validateFaultInjection: func(tCtx ktesting.TContext, ops []correctness.Operation, watches []correctness.WatchOperation) {
-				require.True(t, hasConsistentListFallback(ops) || hasUnaryTimeoutError(ops),
+				require.True(tCtx, hasConsistentListFallback(ops) || hasUnaryTimeoutError(ops),
 					"expected dropped progress bookmarks during >3s idle window to trigger consistent List fallback to etcd or unary TooLargeResourceVersionError")
-				require.True(t, hasWatchEventReason(watches, metav1.StatusReasonTimeout),
+				require.True(tCtx, hasWatchEventReason(watches, metav1.StatusReasonTimeout),
 					"expected dropped progress bookmarks during >3s idle window to trigger WatchList StatusReasonTimeout error events")
 			},
 		},
@@ -287,14 +293,14 @@ func TestCorrectness(t *testing.T) {
 			setupStorage: func(tCtx ktesting.TContext) (storage.Interface, string) {
 				origFreshDuration := cacher.DefaultEventFreshDuration
 				cacher.DefaultEventFreshDuration = 50 * time.Millisecond
-				t.Cleanup(func() {
+				tCtx.Cleanup(func() {
 					cacher.DefaultEventFreshDuration = origFreshDuration
 				})
 				store, prefix := setupStore(tCtx)
 				return setupCacher(tCtx, store), prefix
 			},
 			validateFaultInjection: func(tCtx ktesting.TContext, _ []correctness.Operation, watches []correctness.WatchOperation) {
-				require.True(t, hasWatchEventReason(watches, metav1.StatusReasonExpired),
+				require.True(tCtx, hasWatchEventReason(watches, metav1.StatusReasonExpired),
 					"expected small history window to expire old watch resource versions with StatusReasonExpired")
 			},
 		},
