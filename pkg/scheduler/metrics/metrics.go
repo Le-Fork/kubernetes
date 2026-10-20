@@ -101,7 +101,7 @@ const (
 	QueueingHintResultError     = "Error"
 )
 
-// Entity label values used for queued_entities, queue_incoming_entities, and preemption metrics.
+// Entity label values used for scheduling, queued_entities, queue_incoming_entities, and preemption metrics.
 const (
 	Pod               = "pod"
 	PodGroup          = "podgroup"
@@ -332,7 +332,7 @@ func InitMetrics() {
 			Name:           "queued_entities",
 			Help:           "Number of queued scheduling entities ('pod', 'podgroup', or 'compositepodgroup'; 'pod' stands for individual pods that are not members of any podgroup) by the queue type. 'active' means number of entities in activeQ; 'backoff' means number of entities in backoffQ; 'unschedulable' means number of entities in unschedulableEntities that the scheduler attempted to schedule and failed; 'gated' is the number of unschedulable entities that the scheduler never attempted to schedule because they are gated.",
 			StabilityLevel: metrics.ALPHA,
-		}, []string{"queue", "type"})
+		}, []string{"queue", "entity"})
 	InFlightEvents = metrics.NewGaugeVec(
 		&metrics.GaugeOpts{
 			Subsystem:      SchedulerSubsystem,
@@ -455,7 +455,7 @@ func InitMetrics() {
 			Name:           "queue_incoming_entities_total",
 			Help:           "Number of scheduling entities added to scheduling queues by event, queue type, and entity type. Entity types are 'pod' (for individual pods that are not members of any podgroup), 'podgroup', or 'compositepodgroup'.",
 			StabilityLevel: metrics.ALPHA,
-		}, []string{"queue", "event", "type"})
+		}, []string{"queue", "event", "entity"})
 
 	PermitWaitDuration = metrics.NewHistogramVec(
 		&metrics.HistogramOpts{
@@ -677,24 +677,24 @@ func InitMetrics() {
 		&metrics.CounterOpts{
 			Subsystem:      SchedulerSubsystem,
 			Name:           "generated_placements_total",
-			Help:           "Number of candidate placements generated when scheduling pod groups, by scheduler profile.",
+			Help:           "Number of candidate placements generated when scheduling pod groups, by scheduler profile and entity type. For pod groups nested in a composite pod group, placements are generated and counted once per evaluated parent placement.",
 			StabilityLevel: metrics.ALPHA,
-		}, []string{"profile"})
+		}, []string{"profile", "entity"})
 	PlacementEvaluations = metrics.NewCounterVec(
 		&metrics.CounterOpts{
 			Subsystem:      SchedulerSubsystem,
 			Name:           "placement_evaluations_total",
-			Help:           "Number of candidate placements evaluated when scheduling pod groups, by result and scheduler profile. 'feasible' means the pod group fit into the placement, while 'infeasible' means it did not.",
+			Help:           "Number of candidate placements evaluated when scheduling pod groups, by result, scheduler profile, and entity type. 'feasible' means the pod group fit into the placement, while 'infeasible' means it did not. For composite pod groups, nested evaluations of child groups are also counted separately under their own entity type.",
 			StabilityLevel: metrics.ALPHA,
-		}, []string{"result", "profile"})
+		}, []string{"result", "profile", "entity"})
 	PlacementEvaluationDuration = metrics.NewHistogramVec(
 		&metrics.HistogramOpts{
 			Subsystem:      SchedulerSubsystem,
 			Name:           "placement_evaluation_duration_seconds",
-			Help:           "Latency in seconds of evaluating a single candidate placement when scheduling pod groups, by result and scheduler profile. 'feasible' means the pod group fit into the placement, while 'infeasible' means it did not.",
+			Help:           "Latency in seconds of evaluating a single candidate placement when scheduling pod groups, by result, scheduler profile, and entity type. For composite pod groups, this covers scheduling the whole subtree on the placement, including nested placement evaluations of child groups, which are also recorded separately under their own entity type. 'feasible' means the pod group fit into the placement, while 'infeasible' means it did not.",
 			Buckets:        metrics.ExponentialBuckets(0.001, 2, 15),
 			StabilityLevel: metrics.ALPHA,
-		}, []string{"result", "profile"})
+		}, []string{"result", "profile", "entity"})
 
 	metricsList = []metrics.Registerable{
 		scheduleAttempts,
@@ -772,24 +772,24 @@ func PendingPodGroupPods() metrics.GaugeMetric {
 	return pendingPods.With(metrics.Labels{"queue": "pending"})
 }
 
-// ActiveEntities returns the queued entities metric with the queue label set to "active" and type label set to "pod", "podgroup", or "compositepodgroup".
+// ActiveEntities returns the queued entities metric with the queue label set to "active" and entity label set to "pod", "podgroup", or "compositepodgroup".
 func ActiveEntities(entityType string) metrics.GaugeMetric {
-	return QueuedEntities.With(metrics.Labels{"queue": "active", "type": entityType})
+	return QueuedEntities.With(metrics.Labels{"queue": "active", "entity": entityType})
 }
 
-// BackoffEntities returns the queued entities metric with the queue label set to "backoff" and type label set to "pod", "podgroup", or "compositepodgroup".
+// BackoffEntities returns the queued entities metric with the queue label set to "backoff" and entity label set to "pod", "podgroup", or "compositepodgroup".
 func BackoffEntities(entityType string) metrics.GaugeMetric {
-	return QueuedEntities.With(metrics.Labels{"queue": "backoff", "type": entityType})
+	return QueuedEntities.With(metrics.Labels{"queue": "backoff", "entity": entityType})
 }
 
-// UnschedulableEntities returns the queued entities metric with the queue label set to "unschedulable" and type label set to "pod", "podgroup", or "compositepodgroup".
+// UnschedulableEntities returns the queued entities metric with the queue label set to "unschedulable" and entity label set to "pod", "podgroup", or "compositepodgroup".
 func UnschedulableEntities(entityType string) metrics.GaugeMetric {
-	return QueuedEntities.With(metrics.Labels{"queue": "unschedulable", "type": entityType})
+	return QueuedEntities.With(metrics.Labels{"queue": "unschedulable", "entity": entityType})
 }
 
-// GatedEntities returns the queued entities metric with the queue label set to "gated" and type label set to "pod", "podgroup", or "compositepodgroup".
+// GatedEntities returns the queued entities metric with the queue label set to "gated" and entity label set to "pod", "podgroup", or "compositepodgroup".
 func GatedEntities(entityType string) metrics.GaugeMetric {
-	return QueuedEntities.With(metrics.Labels{"queue": "gated", "type": entityType})
+	return QueuedEntities.With(metrics.Labels{"queue": "gated", "entity": entityType})
 }
 
 // SinceInSeconds gets the time since the specified start in seconds.
