@@ -125,7 +125,7 @@ type objState struct {
 // when a precondition, validation, or update error occurs. If the state is already
 // current, or if the revision in etcd matches the cached revision, it returns the
 // original error.
-func refreshOnError(st *objState, err error, getCurrentState func() (*objState, error)) (*objState, error) {
+func refreshOnError(ctx context.Context, st *objState, err error, ignoreNotFound bool, getCurrentState func(ctx context.Context, ignoreNotFound bool) (*objState, error)) (*objState, error) {
 	// If our data is already up to date, return the error
 	if st.current {
 		return st, err
@@ -136,7 +136,7 @@ func refreshOnError(st *objState, err error, getCurrentState func() (*objState, 
 	cachedRev := st.rev
 	cachedErr := err
 
-	currentState, err := getCurrentState()
+	currentState, err := getCurrentState(ctx, ignoreNotFound)
 	if err != nil {
 		return nil, err
 	}
@@ -419,29 +419,24 @@ func (s *store) Delete(
 	if expectTransformOrDecodeError {
 		cachedExistingObject = nil
 	}
-	return s.conditionalDelete(ctx, preparedKey, out, v, preconditions, validateDeletion, cachedExistingObject, expectTransformOrDecodeError)
-}
-
-func (s *store) conditionalDelete(
-	ctx context.Context, key string, out runtime.Object, v reflect.Value, preconditions *storage.Preconditions,
-	validateDeletion storage.ValidateObjectFunc, cachedExistingObject runtime.Object, expectTransformOrDecodeError bool) error {
-	getCurrentState := s.getCurrentState(ctx, "deleteGet", key, v, false, expectTransformOrDecodeError)
-
+	d := newStoreTxnDelegator(s, preparedKey, v, "deleteGet", expectTransformOrDecodeError)
 	var origState *objState
-	var err error
 	if cachedExistingObject != nil {
 		origState, err = s.getStateFromObject(cachedExistingObject, false)
 	} else {
-		origState, err = getCurrentState()
+		origState, err = d.GetCurrentState(ctx, false)
 	}
 	if err != nil {
 		return err
 	}
+	return conditionalDelete(ctx, d, preparedKey, out, preconditions, validateDeletion, origState)
+}
 
+func conditionalDelete(ctx context.Context, d txnDelegator, key string, out runtime.Object, preconditions *storage.Preconditions, validateDeletion storage.ValidateObjectFunc, origState *objState) (err error) {
 	for {
 		if preconditions != nil {
 			if err := preconditions.Check(key, origState.obj); err != nil {
-				origState, err = refreshOnError(origState, err, getCurrentState)
+				origState, err = refreshOnError(ctx, origState, err, false, d.GetCurrentState)
 				if err != nil {
 					return err
 				}
@@ -449,7 +444,7 @@ func (s *store) conditionalDelete(
 			}
 		}
 		if err := validateDeletion(ctx, origState.obj); err != nil {
-			origState, err = refreshOnError(origState, err, getCurrentState)
+			origState, err = refreshOnError(ctx, origState, err, false, d.GetCurrentState)
 			if err != nil {
 				return err
 			}
@@ -457,7 +452,7 @@ func (s *store) conditionalDelete(
 		}
 
 		var success bool
-		origState, success, err = s.deleteOnce(ctx, key, out, origState, v, expectTransformOrDecodeError)
+		origState, success, err = d.DeleteOnce(ctx, origState, out)
 		if err != nil {
 			return err
 		}
@@ -513,23 +508,27 @@ func (s *store) GuaranteedUpdate(
 	if err != nil {
 		return fmt.Errorf("unable to convert output object to pointer: %v", err)
 	}
-
-	getCurrentState := s.getCurrentState(ctx, "updateGet", preparedKey, v, ignoreNotFound, false)
-
+	d := newStoreTxnDelegator(s, preparedKey, v, "updateGet", false)
 	var origState *objState
 	if cachedExistingObject != nil {
 		origState, err = s.getStateFromObject(cachedExistingObject, false)
 	} else {
-		origState, err = getCurrentState()
+		origState, err = d.GetCurrentState(ctx, ignoreNotFound)
 	}
 	if err != nil {
 		return err
 	}
+
+	return guaranteedUpdate(ctx, d, preparedKey, destination, ignoreNotFound, preconditions, tryUpdate, origState)
+}
+
+func guaranteedUpdate(ctx context.Context, d txnDelegator, key string, destination runtime.Object, ignoreNotFound bool, preconditions *storage.Preconditions, tryUpdate storage.UpdateFunc, origState *objState) (err error) {
+	span := tracing.SpanFromContext(ctx)
 	span.AddEvent("initial value restored")
 
 	for {
-		if err := preconditions.Check(preparedKey, origState.obj); err != nil {
-			origState, err = refreshOnError(origState, err, getCurrentState)
+		if err := preconditions.Check(key, origState.obj); err != nil {
+			origState, err = refreshOnError(ctx, origState, err, ignoreNotFound, d.GetCurrentState)
 			if err != nil {
 				return err
 			}
@@ -538,7 +537,7 @@ func (s *store) GuaranteedUpdate(
 
 		ret, ttl, err := updateState(origState, tryUpdate)
 		if err != nil {
-			origState, err = refreshOnError(origState, err, getCurrentState)
+			origState, err = refreshOnError(ctx, origState, err, ignoreNotFound, d.GetCurrentState)
 			if err != nil {
 				return err
 			}
@@ -546,7 +545,7 @@ func (s *store) GuaranteedUpdate(
 		}
 
 		var success bool
-		origState, success, err = s.updateOnce(ctx, preparedKey, destination, origState, ret, ttl, v, ignoreNotFound, getCurrentState)
+		origState, success, err = d.UpdateOnce(ctx, origState, ret, ttl, destination, ignoreNotFound)
 		if err != nil {
 			return err
 		}
@@ -556,7 +555,7 @@ func (s *store) GuaranteedUpdate(
 	}
 }
 
-func (s *store) updateOnce(ctx context.Context, preparedKey string, destination runtime.Object, origState *objState, ret runtime.Object, ttl uint64, v reflect.Value, ignoreNotFound bool, getCurrentState func() (*objState, error)) (state *objState, success bool, err error) {
+func (s *store) updateOnce(ctx context.Context, preparedKey string, destination runtime.Object, origState *objState, ret runtime.Object, ttl uint64, v reflect.Value, ignoreNotFound bool) (state *objState, success bool, err error) {
 	if err := s.versioner.PrepareObjectForStorage(ret); err != nil {
 		return origState, false, fmt.Errorf("PrepareObjectForStorage failed: %v", err)
 	}
@@ -575,7 +574,7 @@ func (s *store) updateOnce(ctx context.Context, preparedKey string, destination 
 		// etcd in order to be sure the data in the store is equivalent to
 		// our desired serialization before short-circuiting a write.
 		if !origState.current {
-			origState, err = getCurrentState()
+			origState, err = s.getCurrentState(ctx, "updateGet", preparedKey, v, ignoreNotFound, false)
 			if err != nil {
 				return origState, false, err
 			}
@@ -643,6 +642,44 @@ func (s *store) updateOnce(ctx context.Context, preparedKey string, destination 
 	}
 	span.AddEvent("Decode succeeded", attribute.Int("len", len(data)))
 	return origState, success, nil
+}
+
+type txnDelegator interface {
+	GetCurrentState(ctx context.Context, ignoreNotFound bool) (*objState, error)
+	DeleteOnce(ctx context.Context, origState *objState, out runtime.Object) (state *objState, success bool, err error)
+	UpdateOnce(ctx context.Context, origState *objState, obj runtime.Object, ttl uint64, destination runtime.Object, ignoreNotFound bool) (state *objState, success bool, err error)
+}
+
+type storeTxnDelegator struct {
+	store                        *store
+	key                          string
+	v                            reflect.Value
+	getVerb                      string
+	expectTransformOrDecodeError bool
+}
+
+var _ txnDelegator = (*storeTxnDelegator)(nil)
+
+func newStoreTxnDelegator(s *store, key string, v reflect.Value, getVerb string, expectTransformOrDecodeError bool) *storeTxnDelegator {
+	return &storeTxnDelegator{
+		store:                        s,
+		key:                          key,
+		v:                            v,
+		getVerb:                      getVerb,
+		expectTransformOrDecodeError: expectTransformOrDecodeError,
+	}
+}
+
+func (d *storeTxnDelegator) GetCurrentState(ctx context.Context, ignoreNotFound bool) (*objState, error) {
+	return d.store.getCurrentState(ctx, d.getVerb, d.key, d.v, ignoreNotFound, d.expectTransformOrDecodeError)
+}
+
+func (d *storeTxnDelegator) DeleteOnce(ctx context.Context, origState *objState, out runtime.Object) (*objState, bool, error) {
+	return d.store.deleteOnce(ctx, d.key, out, origState, d.v, d.expectTransformOrDecodeError)
+}
+
+func (d *storeTxnDelegator) UpdateOnce(ctx context.Context, origState *objState, obj runtime.Object, ttl uint64, destination runtime.Object, ignoreNotFound bool) (*objState, bool, error) {
+	return d.store.updateOnce(ctx, d.key, destination, origState, obj, ttl, d.v, ignoreNotFound)
 }
 
 func getNewItemFunc(listObj runtime.Object, v reflect.Value) func() runtime.Object {
@@ -1171,16 +1208,14 @@ func (s *store) watchContext(ctx context.Context) context.Context {
 	return clientv3.WithRequireLeader(ctx)
 }
 
-func (s *store) getCurrentState(ctx context.Context, verb, key string, v reflect.Value, ignoreNotFound bool, expectTransformOrDecodeError bool) func() (*objState, error) {
-	return func() (*objState, error) {
-		startTime := time.Now()
-		getResp, err := s.client.Kubernetes.Get(ctx, key, kubernetes.GetOptions{})
-		metrics.RecordEtcdRequest(verb, s.groupResource, err, startTime)
-		if err != nil {
-			return nil, err
-		}
-		return s.stateFromEtcdResponse(ctx, getResp.KV, getResp.Revision, key, v, ignoreNotFound, expectTransformOrDecodeError)
+func (s *store) getCurrentState(ctx context.Context, verb, key string, v reflect.Value, ignoreNotFound bool, expectTransformOrDecodeError bool) (*objState, error) {
+	startTime := time.Now()
+	getResp, err := s.client.Kubernetes.Get(ctx, key, kubernetes.GetOptions{})
+	metrics.RecordEtcdRequest(verb, s.groupResource, err, startTime)
+	if err != nil {
+		return nil, err
 	}
+	return s.stateFromEtcdResponse(ctx, getResp.KV, getResp.Revision, key, v, ignoreNotFound, expectTransformOrDecodeError)
 }
 
 // stateFromEtcdResponse constructs a new objState from the given response from the storage. If
