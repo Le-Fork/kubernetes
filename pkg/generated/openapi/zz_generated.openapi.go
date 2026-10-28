@@ -81,8 +81,8 @@ import (
 	storagev1beta1 "k8s.io/api/storage/v1beta1"
 	storagemigrationv1 "k8s.io/api/storagemigration/v1"
 	storagemigrationv1beta1 "k8s.io/api/storagemigration/v1beta1"
-	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
-	apiextensionsv1beta1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
+	apiextensionsv1 "k8s.io/apiextensions-api/pkg/apis/apiextensions/v1"
+	apiextensionsv1beta1 "k8s.io/apiextensions-api/pkg/apis/apiextensions/v1beta1"
 	resource "k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	metav1beta1 "k8s.io/apimachinery/pkg/apis/meta/v1beta1"
@@ -1249,8 +1249,12 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		schedulingv1beta1.CompositeBasicSchedulingPolicy{}.OpenAPIModelName():                                           schema_k8sio_api_scheduling_v1beta1_CompositeBasicSchedulingPolicy(ref),
 		schedulingv1beta1.CompositeDisruptionMode{}.OpenAPIModelName():                                                  schema_k8sio_api_scheduling_v1beta1_CompositeDisruptionMode(ref),
 		schedulingv1beta1.CompositeGangSchedulingPolicy{}.OpenAPIModelName():                                            schema_k8sio_api_scheduling_v1beta1_CompositeGangSchedulingPolicy(ref),
+		schedulingv1beta1.CompositePodGroup{}.OpenAPIModelName():                                                        schema_k8sio_api_scheduling_v1beta1_CompositePodGroup(ref),
+		schedulingv1beta1.CompositePodGroupList{}.OpenAPIModelName():                                                    schema_k8sio_api_scheduling_v1beta1_CompositePodGroupList(ref),
 		schedulingv1beta1.CompositePodGroupSchedulingConstraints{}.OpenAPIModelName():                                   schema_k8sio_api_scheduling_v1beta1_CompositePodGroupSchedulingConstraints(ref),
 		schedulingv1beta1.CompositePodGroupSchedulingPolicy{}.OpenAPIModelName():                                        schema_k8sio_api_scheduling_v1beta1_CompositePodGroupSchedulingPolicy(ref),
+		schedulingv1beta1.CompositePodGroupSpec{}.OpenAPIModelName():                                                    schema_k8sio_api_scheduling_v1beta1_CompositePodGroupSpec(ref),
+		schedulingv1beta1.CompositePodGroupStatus{}.OpenAPIModelName():                                                  schema_k8sio_api_scheduling_v1beta1_CompositePodGroupStatus(ref),
 		schedulingv1beta1.CompositePodGroupTemplate{}.OpenAPIModelName():                                                schema_k8sio_api_scheduling_v1beta1_CompositePodGroupTemplate(ref),
 		schedulingv1beta1.DisruptionMode{}.OpenAPIModelName():                                                           schema_k8sio_api_scheduling_v1beta1_DisruptionMode(ref),
 		schedulingv1beta1.GangSchedulingPolicy{}.OpenAPIModelName():                                                     schema_k8sio_api_scheduling_v1beta1_GangSchedulingPolicy(ref),
@@ -1520,6 +1524,7 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		kubecontrollermanagerconfigv1alpha1.GarbageCollectorControllerConfiguration{}.OpenAPIModelName():                schema_k8sio_kube_controller_manager_config_v1alpha1_GarbageCollectorControllerConfiguration(ref),
 		kubecontrollermanagerconfigv1alpha1.GroupResource{}.OpenAPIModelName():                                          schema_k8sio_kube_controller_manager_config_v1alpha1_GroupResource(ref),
 		kubecontrollermanagerconfigv1alpha1.HPAControllerConfiguration{}.OpenAPIModelName():                             schema_k8sio_kube_controller_manager_config_v1alpha1_HPAControllerConfiguration(ref),
+		kubecontrollermanagerconfigv1alpha1.ImperativeEvictionResponderControllerConfiguration{}.OpenAPIModelName():     schema_k8sio_kube_controller_manager_config_v1alpha1_ImperativeEvictionResponderControllerConfiguration(ref),
 		kubecontrollermanagerconfigv1alpha1.JobControllerConfiguration{}.OpenAPIModelName():                             schema_k8sio_kube_controller_manager_config_v1alpha1_JobControllerConfiguration(ref),
 		kubecontrollermanagerconfigv1alpha1.KubeControllerManagerConfiguration{}.OpenAPIModelName():                     schema_k8sio_kube_controller_manager_config_v1alpha1_KubeControllerManagerConfiguration(ref),
 		kubecontrollermanagerconfigv1alpha1.LegacySATokenCleanerConfiguration{}.OpenAPIModelName():                      schema_k8sio_kube_controller_manager_config_v1alpha1_LegacySATokenCleanerConfiguration(ref),
@@ -29471,7 +29476,7 @@ func schema_k8sio_api_core_v1_PodSpec(ref common.ReferenceCallback) common.OpenA
 					},
 					"schedulingGroup": {
 						SchemaProps: spec.SchemaProps{
-							Description: "schedulingGroup provides a reference to the immediate scheduling runtime grouping object that this Pod belongs to. This field is used by the scheduler to identify the group and apply the correct group scheduling policies. The association with a group also impacts other lifecycle aspects of a Pod that are relevant in a wider context of scheduling like preemption, resource attachment, etc. If not specified, the Pod is treated as a single unit in all of these aspects. The group object referenced by this field may not exist at the time the Pod is created. This field is immutable, but a group object with the same name may be recreated with different policies. Doing this during pod scheduling may result in the placement not conforming to the expected policies.",
+							Description: "schedulingGroup provides a reference to the immediate scheduling runtime grouping object that this Pod belongs to. This field is used by the scheduler to identify the group and apply the correct group scheduling policies. The association with a group also impacts other lifecycle aspects of a Pod that are relevant in a wider context of scheduling like preemption, resource attachment, etc. If not specified, the Pod is treated as a single unit in all of these aspects. The group object referenced by this field may not exist at the time the Pod is created. This field is immutable. The scheduler cannot distinguish PodGroup runtime instances that reuse the same namespace and name. Controllers should use a new PodGroup name for each runtime instance. Reusing a name for a PodGroup with different policies may result in Pod placement not conforming to the expected policies.",
 							Ref:         ref(corev1.PodSchedulingGroup{}.OpenAPIModelName()),
 						},
 					},
@@ -48284,7 +48289,7 @@ func schema_k8sio_api_resource_v1_CapacityRequirements(ref common.ReferenceCallb
 				Properties: map[string]spec.Schema{
 					"requests": {
 						SchemaProps: spec.SchemaProps{
-							Description: "requests represent individual device resource requests for distinct resources, all of which must be provided by the device.\n\nThis value is used as an additional filtering condition against the available capacity on the device. This is semantically equivalent to a CEL selector with `device.capacity[<domain>].<name>.compareTo(quantity(<request quantity>)) >= 0`. For example, device.capacity['test-driver.cdi.k8s.io'].counters.compareTo(quantity('2')) >= 0.\n\nThe domain prefix can be omitted, in which case it defaults to the driver of the device under evaluation. For example, \"bandwidth: 1Gi\" is equivalent to \"<driver>/bandwidth: 1Gi\" for a device published by driver \"<driver>\", regardless of which other, differently-domained \"bandwidth\" capacities that device might also have. To request one of those, the domain must be given explicitly, for example \"example.com/bandwidth\". Requesting the same driver capacity with and without the driver name as domain, for example \"bandwidth: 1Gi\" and \"<driver>/bandwidth: 2Gi\", is ambiguous and causes scheduling to fail with an error. For the sake of consistency there's no exception for such a conflict where the value is the same - that is still an error.\n\nWhen a requestPolicy is defined, the requested amount is adjusted upward to the nearest valid value based on the policy. If the requested amount cannot be adjusted to a valid value—because it exceeds what the requestPolicy allows— the device is considered ineligible for allocation.\n\nFor any capacity that is not explicitly requested: - If no requestPolicy is set, the default consumed capacity is equal to the full device capacity\n  (i.e., the whole device is claimed).\n- If a requestPolicy is set, the default consumed capacity is determined according to that policy.\n\nIf the device allows multiple allocation, the aggregated amount across all requests must not exceed the capacity value. The consumed capacity, which may be adjusted based on the requestPolicy if defined, is recorded in the resource claim’s status.devices[*].consumedCapacity field.",
+							Description: "requests represent individual device resource requests for distinct resources, all of which must be provided by the device.\n\nThis value is used as an additional filtering condition against the available capacity on the device. This is semantically equivalent to a CEL selector with `device.capacity[<domain>].<name>.compareTo(quantity(<request quantity>)) >= 0`. For example, device.capacity['test-driver.cdi.k8s.io'].counters.compareTo(quantity('2')) >= 0.\n\nThe domain prefix can be omitted, in which case it defaults to the driver of the device under evaluation. For example, \"bandwidth: 1Gi\" is equivalent to \"<driver>/bandwidth: 1Gi\" for a device published by driver \"<driver>\", regardless of which other, differently-domained \"bandwidth\" capacities that device might also have. To request one of those, the domain must be given explicitly, for example \"example.com/bandwidth\". Requesting the same driver capacity with and without the driver name as domain, for example \"bandwidth: 1Gi\" and \"<driver>/bandwidth: 2Gi\", is ambiguous and causes scheduling to fail with an error. For the sake of consistency there's no exception for such a conflict where the value is the same - that is still an error.\n\nWhen a requestPolicy is defined, the requested amount is adjusted upward to the nearest valid value based on the policy. If the requested amount cannot be adjusted to a valid value—because it exceeds what the requestPolicy allows— the device is considered ineligible for allocation.\n\nFor any capacity that is not explicitly requested: - If no requestPolicy is set, the default consumed capacity is equal to the full device capacity\n  (i.e., the whole device is claimed).\n- If a requestPolicy is set, the default consumed capacity is determined according to that policy.\n\nIf the device allows multiple allocation, the aggregated amount across all requests must not exceed the capacity value. The consumed capacity, which may be adjusted based on the requestPolicy if defined, is recorded in the resource claim's status.devices[*].consumedCapacity field.\n\nRequests may have at most 32 entries. The values must not be negative.",
 							Type:        []string{"object"},
 							AdditionalProperties: &spec.SchemaOrBool{
 								Allows: true,
@@ -49378,7 +49383,7 @@ func schema_k8sio_api_resource_v1_DeviceRequestAllocationResult(ref common.Refer
 					},
 					"consumedCapacity": {
 						SchemaProps: spec.SchemaProps{
-							Description: "consumedCapacity tracks the amount of capacity consumed per device as part of the claim request. The consumed amount may differ from the requested amount: it is rounded up to the nearest valid value based on the device’s requestPolicy if applicable (i.e., may not be less than the requested amount).\n\nThe total consumed capacity for each device must not exceed the DeviceCapacity's Value.\n\nThis field is populated only for devices that allow multiple allocations. All capacity entries are included, even if the consumed amount is zero. The domain prefix in the capacity name may be omitted if it is the same as the driver name.",
+							Description: "consumedCapacity tracks the amount of capacity consumed per device as part of the claim request. The consumed amount may differ from the requested amount: it is rounded up to the nearest valid value based on the device’s requestPolicy if applicable (i.e., may not be less than the requested amount).\n\nThe total consumed capacity for each device must not exceed the DeviceCapacity's Value.\n\nThis field is populated only for devices that allow multiple allocations. All capacity entries are included, even if the consumed amount is zero. The domain prefix in the capacity name may be omitted if it is the same as the driver name.\n\nConsumedCapacity may have at most 32 entries. The values must not be negative.",
 							Type:        []string{"object"},
 							AdditionalProperties: &spec.SchemaOrBool{
 								Allows: true,
@@ -51856,7 +51861,7 @@ func schema_k8sio_api_resource_v1beta1_CapacityRequirements(ref common.Reference
 				Properties: map[string]spec.Schema{
 					"requests": {
 						SchemaProps: spec.SchemaProps{
-							Description: "requests represent individual device resource requests for distinct resources, all of which must be provided by the device.\n\nThis value is used as an additional filtering condition against the available capacity on the device. This is semantically equivalent to a CEL selector with `device.capacity[<domain>].<name>.compareTo(quantity(<request quantity>)) >= 0`. For example, device.capacity['test-driver.cdi.k8s.io'].counters.compareTo(quantity('2')) >= 0.\n\nThe domain prefix can be omitted, in which case it defaults to the driver of the device under evaluation. For example, \"bandwidth: 1Gi\" is equivalent to \"<driver>/bandwidth: 1Gi\" for a device published by driver \"<driver>\", regardless of which other, differently-domained \"bandwidth\" capacities that device might also have. To request one of those, the domain must be given explicitly, for example \"example.com/bandwidth\". Requesting the same driver capacity with and without the driver name as domain, for example \"bandwidth: 1Gi\" and \"<driver>/bandwidth: 2Gi\", is ambiguous and causes scheduling to fail with an error. For the sake of consistency there's no exception for such a conflict where the value is the same - that is still an error.\n\nWhen a requestPolicy is defined, the requested amount is adjusted upward to the nearest valid value based on the policy. If the requested amount cannot be adjusted to a valid value—because it exceeds what the requestPolicy allows— the device is considered ineligible for allocation.\n\nFor any capacity that is not explicitly requested: - If no requestPolicy is set, the default consumed capacity is equal to the full device capacity\n  (i.e., the whole device is claimed).\n- If a requestPolicy is set, the default consumed capacity is determined according to that policy.\n\nIf the device allows multiple allocation, the aggregated amount across all requests must not exceed the capacity value. The consumed capacity, which may be adjusted based on the requestPolicy if defined, is recorded in the resource claim’s status.devices[*].consumedCapacity field.",
+							Description: "requests represent individual device resource requests for distinct resources, all of which must be provided by the device.\n\nThis value is used as an additional filtering condition against the available capacity on the device. This is semantically equivalent to a CEL selector with `device.capacity[<domain>].<name>.compareTo(quantity(<request quantity>)) >= 0`. For example, device.capacity['test-driver.cdi.k8s.io'].counters.compareTo(quantity('2')) >= 0.\n\nThe domain prefix can be omitted, in which case it defaults to the driver of the device under evaluation. For example, \"bandwidth: 1Gi\" is equivalent to \"<driver>/bandwidth: 1Gi\" for a device published by driver \"<driver>\", regardless of which other, differently-domained \"bandwidth\" capacities that device might also have. To request one of those, the domain must be given explicitly, for example \"example.com/bandwidth\". Requesting the same driver capacity with and without the driver name as domain, for example \"bandwidth: 1Gi\" and \"<driver>/bandwidth: 2Gi\", is ambiguous and causes scheduling to fail with an error. For the sake of consistency there's no exception for such a conflict where the value is the same - that is still an error.\n\nWhen a requestPolicy is defined, the requested amount is adjusted upward to the nearest valid value based on the policy. If the requested amount cannot be adjusted to a valid value—because it exceeds what the requestPolicy allows— the device is considered ineligible for allocation.\n\nFor any capacity that is not explicitly requested: - If no requestPolicy is set, the default consumed capacity is equal to the full device capacity\n  (i.e., the whole device is claimed).\n- If a requestPolicy is set, the default consumed capacity is determined according to that policy.\n\nIf the device allows multiple allocation, the aggregated amount across all requests must not exceed the capacity value. The consumed capacity, which may be adjusted based on the requestPolicy if defined, is recorded in the resource claim's status.devices[*].consumedCapacity field.\n\nRequests may have at most 32 entries. The values must not be negative.",
 							Type:        []string{"object"},
 							AdditionalProperties: &spec.SchemaOrBool{
 								Allows: true,
@@ -52890,7 +52895,7 @@ func schema_k8sio_api_resource_v1beta1_DeviceRequestAllocationResult(ref common.
 					},
 					"consumedCapacity": {
 						SchemaProps: spec.SchemaProps{
-							Description: "consumedCapacity tracks the amount of capacity consumed per device as part of the claim request. The consumed amount may differ from the requested amount: it is rounded up to the nearest valid value based on the device’s requestPolicy if applicable (i.e., may not be less than the requested amount).\n\nThe total consumed capacity for each device must not exceed the DeviceCapacity's Value.\n\nThis field is populated only for devices that allow multiple allocations. All capacity entries are included, even if the consumed amount is zero. The domain prefix in the capacity name may be omitted if it is the same as the driver name.",
+							Description: "consumedCapacity tracks the amount of capacity consumed per device as part of the claim request. The consumed amount may differ from the requested amount: it is rounded up to the nearest valid value based on the device’s requestPolicy if applicable (i.e., may not be less than the requested amount).\n\nThe total consumed capacity for each device must not exceed the DeviceCapacity's Value.\n\nThis field is populated only for devices that allow multiple allocations. All capacity entries are included, even if the consumed amount is zero. The domain prefix in the capacity name may be omitted if it is the same as the driver name.\n\nConsumedCapacity may have at most 32 entries. The values must not be negative.",
 							Type:        []string{"object"},
 							AdditionalProperties: &spec.SchemaOrBool{
 								Allows: true,
@@ -54154,7 +54159,7 @@ func schema_k8sio_api_resource_v1beta2_CapacityRequirements(ref common.Reference
 				Properties: map[string]spec.Schema{
 					"requests": {
 						SchemaProps: spec.SchemaProps{
-							Description: "requests represent individual device resource requests for distinct resources, all of which must be provided by the device.\n\nThis value is used as an additional filtering condition against the available capacity on the device. This is semantically equivalent to a CEL selector with `device.capacity[<domain>].<name>.compareTo(quantity(<request quantity>)) >= 0`. For example, device.capacity['test-driver.cdi.k8s.io'].counters.compareTo(quantity('2')) >= 0.\n\nThe domain prefix can be omitted, in which case it defaults to the driver of the device under evaluation. For example, \"bandwidth: 1Gi\" is equivalent to \"<driver>/bandwidth: 1Gi\" for a device published by driver \"<driver>\", regardless of which other, differently-domained \"bandwidth\" capacities that device might also have. To request one of those, the domain must be given explicitly, for example \"example.com/bandwidth\". Requesting the same driver capacity with and without the driver name as domain, for example \"bandwidth: 1Gi\" and \"<driver>/bandwidth: 2Gi\", is ambiguous and causes scheduling to fail with an error. For the sake of consistency there's no exception for such a conflict where the value is the same - that is still an error.\n\nWhen a requestPolicy is defined, the requested amount is adjusted upward to the nearest valid value based on the policy. If the requested amount cannot be adjusted to a valid value—because it exceeds what the requestPolicy allows— the device is considered ineligible for allocation.\n\nFor any capacity that is not explicitly requested: - If no requestPolicy is set, the default consumed capacity is equal to the full device capacity\n  (i.e., the whole device is claimed).\n- If a requestPolicy is set, the default consumed capacity is determined according to that policy.\n\nIf the device allows multiple allocation, the aggregated amount across all requests must not exceed the capacity value. The consumed capacity, which may be adjusted based on the requestPolicy if defined, is recorded in the resource claim’s status.devices[*].consumedCapacity field.",
+							Description: "requests represent individual device resource requests for distinct resources, all of which must be provided by the device.\n\nThis value is used as an additional filtering condition against the available capacity on the device. This is semantically equivalent to a CEL selector with `device.capacity[<domain>].<name>.compareTo(quantity(<request quantity>)) >= 0`. For example, device.capacity['test-driver.cdi.k8s.io'].counters.compareTo(quantity('2')) >= 0.\n\nThe domain prefix can be omitted, in which case it defaults to the driver of the device under evaluation. For example, \"bandwidth: 1Gi\" is equivalent to \"<driver>/bandwidth: 1Gi\" for a device published by driver \"<driver>\", regardless of which other, differently-domained \"bandwidth\" capacities that device might also have. To request one of those, the domain must be given explicitly, for example \"example.com/bandwidth\". Requesting the same driver capacity with and without the driver name as domain, for example \"bandwidth: 1Gi\" and \"<driver>/bandwidth: 2Gi\", is ambiguous and causes scheduling to fail with an error. For the sake of consistency there's no exception for such a conflict where the value is the same - that is still an error.\n\nWhen a requestPolicy is defined, the requested amount is adjusted upward to the nearest valid value based on the policy. If the requested amount cannot be adjusted to a valid value—because it exceeds what the requestPolicy allows— the device is considered ineligible for allocation.\n\nFor any capacity that is not explicitly requested: - If no requestPolicy is set, the default consumed capacity is equal to the full device capacity\n  (i.e., the whole device is claimed).\n- If a requestPolicy is set, the default consumed capacity is determined according to that policy.\n\nIf the device allows multiple allocation, the aggregated amount across all requests must not exceed the capacity value. The consumed capacity, which may be adjusted based on the requestPolicy if defined, is recorded in the resource claim’s status.devices[*].consumedCapacity field.\n\nRequests may have at most 32 entries. The values must not be negative.",
 							Type:        []string{"object"},
 							AdditionalProperties: &spec.SchemaOrBool{
 								Allows: true,
@@ -55248,7 +55253,7 @@ func schema_k8sio_api_resource_v1beta2_DeviceRequestAllocationResult(ref common.
 					},
 					"consumedCapacity": {
 						SchemaProps: spec.SchemaProps{
-							Description: "consumedCapacity tracks the amount of capacity consumed per device as part of the claim request. The consumed amount may differ from the requested amount: it is rounded up to the nearest valid value based on the device’s requestPolicy if applicable (i.e., may not be less than the requested amount).\n\nThe total consumed capacity for each device must not exceed the DeviceCapacity's Value.\n\nThis field is populated only for devices that allow multiple allocations. All capacity entries are included, even if the consumed amount is zero. The domain prefix in the capacity name may be omitted if it is the same as the driver name.",
+							Description: "consumedCapacity tracks the amount of capacity consumed per device as part of the claim request. The consumed amount may differ from the requested amount: it is rounded up to the nearest valid value based on the device’s requestPolicy if applicable (i.e., may not be less than the requested amount).\n\nThe total consumed capacity for each device must not exceed the DeviceCapacity's Value.\n\nThis field is populated only for devices that allow multiple allocations. All capacity entries are included, even if the consumed amount is zero. The domain prefix in the capacity name may be omitted if it is the same as the driver name.\n\nConsumedCapacity may have at most 32 entries. The values must not be negative.",
 							Type:        []string{"object"},
 							AdditionalProperties: &spec.SchemaOrBool{
 								Allows: true,
@@ -58485,6 +58490,107 @@ func schema_k8sio_api_scheduling_v1beta1_CompositeGangSchedulingPolicy(ref commo
 	}
 }
 
+func schema_k8sio_api_scheduling_v1beta1_CompositePodGroup(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "CompositePodGroup represents a runtime instance of pod groups grouped together. CompositePodGroups are created by workload controllers (LWS, JobSet, etc...) from Workload.compositePodGroupTemplates. CompositePodGroup API enablement is toggled by the CompositePodGroup feature gate.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"apiVersion": {
+						SchemaProps: spec.SchemaProps{
+							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"metadata": {
+						SchemaProps: spec.SchemaProps{
+							Description: "metadata is the standard object metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata",
+							Default:     map[string]interface{}{},
+							Ref:         ref(metav1.ObjectMeta{}.OpenAPIModelName()),
+						},
+					},
+					"spec": {
+						SchemaProps: spec.SchemaProps{
+							Description: "spec defines the desired state of the CompositePodGroup.",
+							Default:     map[string]interface{}{},
+							Ref:         ref(schedulingv1beta1.CompositePodGroupSpec{}.OpenAPIModelName()),
+						},
+					},
+					"status": {
+						SchemaProps: spec.SchemaProps{
+							Description: "status represents the current observed state of the CompositePodGroup.",
+							Default:     map[string]interface{}{},
+							Ref:         ref(schedulingv1beta1.CompositePodGroupStatus{}.OpenAPIModelName()),
+						},
+					},
+				},
+				Required: []string{"spec"},
+			},
+		},
+		Dependencies: []string{
+			schedulingv1beta1.CompositePodGroupSpec{}.OpenAPIModelName(), schedulingv1beta1.CompositePodGroupStatus{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
+	}
+}
+
+func schema_k8sio_api_scheduling_v1beta1_CompositePodGroupList(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "CompositePodGroupList contains a list of CompositePodGroup resources.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"apiVersion": {
+						SchemaProps: spec.SchemaProps{
+							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"metadata": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Standard list metadata.",
+							Default:     map[string]interface{}{},
+							Ref:         ref(metav1.ListMeta{}.OpenAPIModelName()),
+						},
+					},
+					"items": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Items is the list of CompositePodGroups.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Ref: ref(schedulingv1beta1.CompositePodGroup{}.OpenAPIModelName()),
+									},
+								},
+							},
+						},
+					},
+				},
+				Required: []string{"items"},
+			},
+		},
+		Dependencies: []string{
+			schedulingv1beta1.CompositePodGroup{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
+	}
+}
+
 func schema_k8sio_api_scheduling_v1beta1_CompositePodGroupSchedulingConstraints(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
@@ -58554,6 +58660,115 @@ func schema_k8sio_api_scheduling_v1beta1_CompositePodGroupSchedulingPolicy(ref c
 		},
 		Dependencies: []string{
 			schedulingv1beta1.CompositeBasicSchedulingPolicy{}.OpenAPIModelName(), schedulingv1beta1.CompositeGangSchedulingPolicy{}.OpenAPIModelName()},
+	}
+}
+
+func schema_k8sio_api_scheduling_v1beta1_CompositePodGroupSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "CompositePodGroupSpec defines the desired state of CompositePodGroup.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"parentCompositePodGroupName": {
+						SchemaProps: spec.SchemaProps{
+							Description: "parentCompositePodGroupName contains the name of the parent composite pod group within the same namespace as this composite pod group. It must be a DNS name. If it's nil, then this composite pod group is a root of a workload's hierarchy. This field is immutable.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"workloadRef": {
+						SchemaProps: spec.SchemaProps{
+							Description: "workloadRef references an optional CompositePodGroup template within the Workload object that was used to create the CompositePodGroup. This field is required. This field is immutable.",
+							Ref:         ref(schedulingv1beta1.WorkloadReference{}.OpenAPIModelName()),
+						},
+					},
+					"schedulingPolicy": {
+						SchemaProps: spec.SchemaProps{
+							Description: "schedulingPolicy defines the scheduling policy for this instance of the CompositePodGroup. Controllers are expected to fill this field by copying it from a CompositePodGroupTemplate.",
+							Default:     map[string]interface{}{},
+							Ref:         ref(schedulingv1beta1.CompositePodGroupSchedulingPolicy{}.OpenAPIModelName()),
+						},
+					},
+					"schedulingConstraints": {
+						SchemaProps: spec.SchemaProps{
+							Description: "schedulingConstraints defines optional scheduling constraints (e.g. topology) for this CompositePodGroup. Controllers are expected to fill this field by copying it from a CompositePodGroupTemplate. This field is immutable.",
+							Ref:         ref(schedulingv1beta1.CompositePodGroupSchedulingConstraints{}.OpenAPIModelName()),
+						},
+					},
+					"disruptionMode": {
+						SchemaProps: spec.SchemaProps{
+							Description: "disruptionMode defines the mode in which a given CompositePodGroup can be disrupted. Controllers are expected to fill this field by copying it from a CompositePodGroupTemplate. One of Single, All. Defaults to Single if unset. This field is immutable.",
+							Default:     map[string]interface{}{"single": map[string]interface{}{}},
+							Ref:         ref(schedulingv1beta1.CompositeDisruptionMode{}.OpenAPIModelName()),
+						},
+					},
+					"priorityClassName": {
+						SchemaProps: spec.SchemaProps{
+							Description: "priorityClassName defines the priority that should be considered when scheduling this CompositePodGroup. Controllers are expected to fill this field by copying it from a CompositePodGroupTemplate. If left unspecified, it is validated and resolved similarly to the PriorityClassName field in Pods (i.e. if no priority class is specified, admission control can set this to the global default priority class if it exists. Otherwise, the composite pod group's priority will be zero). This field is immutable.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"priority": {
+						SchemaProps: spec.SchemaProps{
+							Description: "priority is the value of priority of this composite pod group. Various system components use this field to find the priority of the composite pod group. When Priority Admission Controller is enabled, it prevents users from setting this field. The admission controller populates this field from PriorityClassName. The higher the value, the higher the priority. This field is immutable.",
+							Type:        []string{"integer"},
+							Format:      "int32",
+						},
+					},
+					"preemptionPolicy": {
+						SchemaProps: spec.SchemaProps{
+							Description: "preemptionPolicy is the Policy for preempting pods/podgroups with lower priority. One of Never, PreemptLowerPriority. Defaults to PreemptLowerPriority if unset. When Priority Admission Controller is enabled, it populates this field from PriorityClassName, and defaults to PreemptLowerPriority if value is unset in PriorityClass. This field is immutable. This field is available only when the PodGroupPreemptionPolicy feature gate is enabled.\n\n\nPossible enum values:\n - `\"Never\"` means that pod never preempts other pods with lower priority.\n - `\"PreemptLowerPriority\"` means that pod can preempt other pods with lower priority.",
+							Type:        []string{"string"},
+							Format:      "",
+							Enum:        []interface{}{"Never", "PreemptLowerPriority"},
+						},
+					},
+				},
+				Required: []string{"workloadRef", "schedulingPolicy"},
+			},
+		},
+		Dependencies: []string{
+			schedulingv1beta1.CompositeDisruptionMode{}.OpenAPIModelName(), schedulingv1beta1.CompositePodGroupSchedulingConstraints{}.OpenAPIModelName(), schedulingv1beta1.CompositePodGroupSchedulingPolicy{}.OpenAPIModelName(), schedulingv1beta1.WorkloadReference{}.OpenAPIModelName()},
+	}
+}
+
+func schema_k8sio_api_scheduling_v1beta1_CompositePodGroupStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "CompositePodGroupStatus represents information about the status of a composite pod group.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"conditions": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-list-map-keys": []interface{}{
+									"type",
+								},
+								"x-kubernetes-list-type":       "map",
+								"x-kubernetes-patch-merge-key": "type",
+								"x-kubernetes-patch-strategy":  "merge",
+							},
+						},
+						SchemaProps: spec.SchemaProps{
+							Description: "conditions represent the latest observations of the CompositePodGroup's state.\n\nKnown condition types: - \"CompositePodGroupInitiallyScheduled\": Indicates whether the overall scheduling requirement\n  for the subtree under this CompositePodGroup has been satisfied. Once this condition\n  transitions to True, it serves as a terminal state and will never revert to False,\n  even if pods are subsequently deleted and group constraints are no longer met.\n- \"DisruptionTarget\": Indicates whether the CompositePodGroup is about to be terminated\n  due to disruption such as preemption.\n\nKnown reasons for the CompositePodGroupInitiallyScheduled condition: - \"Scheduled\": All required child groups and pods under this CompositePodGroup have been successfully scheduled. - \"Unschedulable\": The CompositePodGroup's subtree could not be placed, for example due to unmet\n  minGroupCount, placement constraints, or insufficient capacity for its child groups.\n- \"SchedulerError\": The CompositePodGroup cannot be scheduled due to some internal error\n  that occurred during scheduling.\n- \"CompositePodGroupError\": The CompositePodGroup cannot be scheduled due to an invalid group layout\n  detected during runtime validation. The `message` field details the specific layout violation (such as\n  a detected cycle, exceeding the maximum depth of 4, or referencing multiple distinct Workloads).\n\nKnown reasons for the DisruptionTarget condition: - \"PreemptionByScheduler\": The CompositePodGroup was preempted by the scheduler to make room for\n  higher-priority CompositePodGroups, PodGroups or Pods.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Ref: ref(metav1.Condition{}.OpenAPIModelName()),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			metav1.Condition{}.OpenAPIModelName()},
 	}
 }
 
@@ -60374,7 +60589,7 @@ func schema_k8sio_api_storage_v1_StorageHealthCondition(ref common.ReferenceCall
 					},
 					"reason": {
 						SchemaProps: spec.SchemaProps{
-							Description: "reason is a brief CamelCase machine-parseable reason. Maximum permitted length of a reason is 256 characters.",
+							Description: "reason is a brief CamelCase machine-parseable reason. Maximum permitted length of a reason is 256 bytes.",
 							Default:     "",
 							Type:        []string{"string"},
 							Format:      "",
@@ -60382,7 +60597,7 @@ func schema_k8sio_api_storage_v1_StorageHealthCondition(ref common.ReferenceCall
 					},
 					"message": {
 						SchemaProps: spec.SchemaProps{
-							Description: "message is a human-readable description. Maximum permitted length of a message is 1024 characters.",
+							Description: "message is a human-readable description. Maximum permitted length of a message is 1024 bytes.",
 							Type:        []string{"string"},
 							Format:      "",
 						},
@@ -62088,7 +62303,7 @@ func schema_k8sio_api_storage_v1beta1_StorageHealthCondition(ref common.Referenc
 					},
 					"reason": {
 						SchemaProps: spec.SchemaProps{
-							Description: "reason is a brief CamelCase machine-parseable reason. Maximum permitted length of a reason is 256 characters.",
+							Description: "reason is a brief CamelCase machine-parseable reason. Maximum permitted length of a reason is 256 bytes.",
 							Default:     "",
 							Type:        []string{"string"},
 							Format:      "",
@@ -62096,7 +62311,7 @@ func schema_k8sio_api_storage_v1beta1_StorageHealthCondition(ref common.Referenc
 					},
 					"message": {
 						SchemaProps: spec.SchemaProps{
-							Description: "message is a human-readable description. Maximum permitted length of a message is 1024 characters.",
+							Description: "message is a human-readable description. Maximum permitted length of a message is 1024 bytes.",
 							Type:        []string{"string"},
 							Format:      "",
 						},
@@ -72214,6 +72429,28 @@ func schema_k8sio_kube_controller_manager_config_v1alpha1_HPAControllerConfigura
 	}
 }
 
+func schema_k8sio_kube_controller_manager_config_v1alpha1_ImperativeEvictionResponderControllerConfiguration(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "ImperativeEvictionResponderControllerConfiguration contains elements configuring the imperative eviction responder controller.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"ConcurrentImperativeEvictionResponderSyncs": {
+						SchemaProps: spec.SchemaProps{
+							Description: "ConcurrentImperativeEvictionResponderSyncs is the number of eviction object syncing and imperative eviction operations that will be done concurrently. Larger number = bigger throughput of imperative eviction calls (pods/<name>/eviction subresource) and faster Eviction status updating, but more CPU (and network) load.",
+							Default:     0,
+							Type:        []string{"integer"},
+							Format:      "int32",
+						},
+					},
+				},
+				Required: []string{"ConcurrentImperativeEvictionResponderSyncs"},
+			},
+		},
+	}
+}
+
 func schema_k8sio_kube_controller_manager_config_v1alpha1_JobControllerConfiguration(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
@@ -72369,6 +72606,13 @@ func schema_k8sio_kube_controller_manager_config_v1alpha1_KubeControllerManagerC
 							Ref:         ref(kubecontrollermanagerconfigv1alpha1.HPAControllerConfiguration{}.OpenAPIModelName()),
 						},
 					},
+					"ImperativeEvictionResponderController": {
+						SchemaProps: spec.SchemaProps{
+							Description: "ImperativeEvictionResponderControllerConfiguration holds configuration for ImperativeEvictionResponderController related features.",
+							Default:     map[string]interface{}{},
+							Ref:         ref(kubecontrollermanagerconfigv1alpha1.ImperativeEvictionResponderControllerConfiguration{}.OpenAPIModelName()),
+						},
+					},
 					"JobController": {
 						SchemaProps: spec.SchemaProps{
 							Description: "JobControllerConfiguration holds configuration for JobController related features.",
@@ -72489,11 +72733,11 @@ func schema_k8sio_kube_controller_manager_config_v1alpha1_KubeControllerManagerC
 						},
 					},
 				},
-				Required: []string{"Generic", "KubeCloudShared", "AttachDetachController", "CSRSigningController", "DaemonSetController", "DeploymentController", "DisruptionController", "StatefulSetController", "DeprecatedController", "EndpointController", "EndpointSliceController", "EndpointSliceMirroringController", "EphemeralVolumeController", "EvictionRequestController", "GarbageCollectorController", "HPAController", "JobController", "CronJobController", "LegacySATokenCleaner", "NamespaceController", "NodeIPAMController", "NodeLifecycleController", "PersistentVolumeBinderController", "PodGCController", "ReplicaSetController", "ReplicationController", "ResourceQuotaController", "SAController", "ServiceController", "TTLAfterFinishedController", "ValidatingAdmissionPolicyStatusController", "DeviceTaintEvictionController", "ResourceClaimController"},
+				Required: []string{"Generic", "KubeCloudShared", "AttachDetachController", "CSRSigningController", "DaemonSetController", "DeploymentController", "DisruptionController", "StatefulSetController", "DeprecatedController", "EndpointController", "EndpointSliceController", "EndpointSliceMirroringController", "EphemeralVolumeController", "EvictionRequestController", "GarbageCollectorController", "HPAController", "ImperativeEvictionResponderController", "JobController", "CronJobController", "LegacySATokenCleaner", "NamespaceController", "NodeIPAMController", "NodeLifecycleController", "PersistentVolumeBinderController", "PodGCController", "ReplicaSetController", "ReplicationController", "ResourceQuotaController", "SAController", "ServiceController", "TTLAfterFinishedController", "ValidatingAdmissionPolicyStatusController", "DeviceTaintEvictionController", "ResourceClaimController"},
 			},
 		},
 		Dependencies: []string{
-			configv1alpha1.KubeCloudSharedConfiguration{}.OpenAPIModelName(), serviceconfigv1alpha1.ServiceControllerConfiguration{}.OpenAPIModelName(), controllermanagerconfigv1alpha1.GenericControllerManagerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.AttachDetachControllerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.CSRSigningControllerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.CronJobControllerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.DaemonSetControllerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.DeploymentControllerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.DeprecatedControllerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.DeviceTaintEvictionControllerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.DisruptionControllerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.EndpointControllerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.EndpointSliceControllerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.EndpointSliceMirroringControllerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.EphemeralVolumeControllerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.EvictionRequestControllerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.GarbageCollectorControllerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.HPAControllerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.JobControllerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.LegacySATokenCleanerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.NamespaceControllerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.NodeIPAMControllerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.NodeLifecycleControllerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.PersistentVolumeBinderControllerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.PodGCControllerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.ReplicaSetControllerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.ReplicationControllerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.ResourceClaimControllerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.ResourceQuotaControllerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.SAControllerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.StatefulSetControllerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.TTLAfterFinishedControllerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.ValidatingAdmissionPolicyStatusControllerConfiguration{}.OpenAPIModelName()},
+			configv1alpha1.KubeCloudSharedConfiguration{}.OpenAPIModelName(), serviceconfigv1alpha1.ServiceControllerConfiguration{}.OpenAPIModelName(), controllermanagerconfigv1alpha1.GenericControllerManagerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.AttachDetachControllerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.CSRSigningControllerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.CronJobControllerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.DaemonSetControllerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.DeploymentControllerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.DeprecatedControllerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.DeviceTaintEvictionControllerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.DisruptionControllerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.EndpointControllerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.EndpointSliceControllerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.EndpointSliceMirroringControllerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.EphemeralVolumeControllerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.EvictionRequestControllerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.GarbageCollectorControllerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.HPAControllerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.ImperativeEvictionResponderControllerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.JobControllerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.LegacySATokenCleanerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.NamespaceControllerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.NodeIPAMControllerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.NodeLifecycleControllerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.PersistentVolumeBinderControllerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.PodGCControllerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.ReplicaSetControllerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.ReplicationControllerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.ResourceClaimControllerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.ResourceQuotaControllerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.SAControllerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.StatefulSetControllerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.TTLAfterFinishedControllerConfiguration{}.OpenAPIModelName(), kubecontrollermanagerconfigv1alpha1.ValidatingAdmissionPolicyStatusControllerConfiguration{}.OpenAPIModelName()},
 	}
 }
 
@@ -76207,7 +76451,7 @@ func schema_k8sio_kubelet_config_v1beta1_CredentialProvider(ref common.Reference
 					},
 					"matchImages": {
 						SchemaProps: spec.SchemaProps{
-							Description: "matchImages is a required list of strings used to match against images in order to determine if this provider should be invoked. If one of the strings matches the requested image from the kubelet, the plugin will be invoked and given a chance to provide credentials. Images are expected to contain the registry domain and URL path.\n\nEach entry in matchImages is a pattern which can optionally contain a port and a path. Globs can be used in the domain, but not in the port or the path. Globs are supported as subdomains like '*.k8s.io' or 'k8s.*.io', and top-level-domains such as 'k8s.*'. Matching partial subdomains like 'app*.k8s.io' is also supported. Each glob can only match a single subdomain segment, so *.io does not match *.k8s.io.\n\nA match exists between an image and a matchImage when all of the below are true: - Both contain the same number of domain parts and each part matches. - The URL path of an imageMatch must be a prefix of the target image URL path. - If the imageMatch contains a port, then the port must match in the image as well.\n\nExample values of matchImages:\n  - 123456789.dkr.ecr.us-east-1.amazonaws.com\n  - *.azurecr.io\n  - gcr.io\n  - *.*.registry.io\n  - registry.io:8080/path",
+							Description: "matchImages is a required list of strings used to match against images in order to determine if this provider should be invoked. If one of the strings matches the requested image from the kubelet, the plugin will be invoked and given a chance to provide credentials. Images are expected to contain the registry domain and URL path.\n\nEach entry in matchImages is a pattern which can optionally contain a port and a path. Globs can be used in the domain, but not in the port or the path. Globs are supported as subdomains like `*.k8s.io` or `k8s.*.io`, and top-level-domains such as `k8s.*`. Matching partial subdomains like `app*.k8s.io` is also supported. Each glob can only match a single subdomain segment, so `*.io` does not match `*.k8s.io`.\n\nA match exists between an image and a matchImage when all of the below are true: - Both contain the same number of domain parts and each part matches. - The URL path of an imageMatch must be a prefix of the target image URL path. - If the imageMatch contains a port, then the port must match in the image as well.\n\nExample values of matchImages:\n  - `123456789.dkr.ecr.us-east-1.amazonaws.com`\n  - `*.azurecr.io`\n  - `gcr.io`\n  - `*.*.registry.io`\n  - `registry.io:8080/path`",
 							Type:        []string{"array"},
 							Items: &spec.SchemaOrArray{
 								Schema: &spec.Schema{
@@ -76841,14 +77085,14 @@ func schema_k8sio_kubelet_config_v1beta1_KubeletConfiguration(ref common.Referen
 					},
 					"authentication": {
 						SchemaProps: spec.SchemaProps{
-							Description: "authentication specifies how requests to the Kubelet's server are authenticated. Defaults:\n  anonymous:\n    enabled: false\n  webhook:\n    enabled: true\n    cacheTTL: \"2m\"",
+							Description: "authentication specifies how requests to the Kubelet's server are authenticated.\n\n\tDefaults:\n\t\tanonymous:\n\t\t\tenabled: false\n\t\twebhook:\n\t\t\tenabled: true\n\t\t\tcacheTTL: \"2m\"",
 							Default:     map[string]interface{}{},
 							Ref:         ref(kubeletconfigv1beta1.KubeletAuthentication{}.OpenAPIModelName()),
 						},
 					},
 					"authorization": {
 						SchemaProps: spec.SchemaProps{
-							Description: "authorization specifies how requests to the Kubelet's server are authorized. Defaults:\n  mode: Webhook\n  webhook:\n    cacheAuthorizedTTL: \"5m\"\n    cacheUnauthorizedTTL: \"30s\"",
+							Description: "authorization specifies how requests to the Kubelet's server are authorized.\n\n\tDefaults:\n\t\tmode: Webhook\n\t\twebhook:\n\t\t\tcacheAuthorizedTTL: \"5m\"\n\t\t\tcacheUnauthorizedTTL: \"30s\"",
 							Default:     map[string]interface{}{},
 							Ref:         ref(kubeletconfigv1beta1.KubeletAuthorization{}.OpenAPIModelName()),
 						},
@@ -77613,7 +77857,7 @@ func schema_k8sio_kubelet_config_v1beta1_KubeletConfiguration(ref common.Referen
 					},
 					"reservedMemory": {
 						SchemaProps: spec.SchemaProps{
-							Description: "reservedMemory specifies a comma-separated list of memory reservations for NUMA nodes. The parameter makes sense only in the context of the memory manager feature. The memory manager will not allocate reserved memory for container workloads. For example, if you have a NUMA0 with 10Gi of memory and the reservedMemory was specified to reserve 1Gi of memory at NUMA0, the memory manager will assume that only 9Gi is available for allocation. You can specify a different amount of NUMA node and memory types. You can omit this parameter at all, but you should be aware that the amount of reserved memory from all NUMA nodes should be equal to the amount of memory specified by the [node allocatable](https://kubernetes.io/docs/tasks/administer-cluster/reserve-compute-resources/#node-allocatable). If at least one node allocatable parameter has a non-zero value, you will need to specify at least one NUMA node. Also, avoid specifying:\n\n1. Duplicates, the same NUMA node, and memory type, but with a different value. 2. zero limits for any memory type. 3. NUMAs nodes IDs that do not exist under the machine. 4. memory types except for memory and hugepages-<size>\n\nDefault: nil",
+							Description: "reservedMemory specifies a comma-separated list of memory reservations for NUMA nodes. The parameter makes sense only in the context of the memory manager feature. The memory manager will not allocate reserved memory for container workloads. For example, if you have a NUMA0 with 10Gi of memory and the reservedMemory was specified to reserve 1Gi of memory at NUMA0, the memory manager will assume that only 9Gi is available for allocation. You can specify a different amount of NUMA node and memory types. You can omit this parameter at all, but you should be aware that the amount of reserved memory from all NUMA nodes should be equal to the amount of memory specified by the [node allocatable](https://kubernetes.io/docs/tasks/administer-cluster/reserve-compute-resources/#node-allocatable). If at least one node allocatable parameter has a non-zero value, you will need to specify at least one NUMA node. Also, avoid specifying:\n\n1. Duplicates, the same NUMA node, and memory type, but with a different value. 2. zero limits for any memory type. 3. NUMAs nodes IDs that do not exist under the machine. 4. memory types except for memory and hugepages-SIZE\n\nDefault: nil",
 							Type:        []string{"array"},
 							Items: &spec.SchemaOrArray{
 								Schema: &spec.Schema{
