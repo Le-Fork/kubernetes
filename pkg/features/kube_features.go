@@ -1113,12 +1113,6 @@ const (
 	// Requires stricter validation of IP addresses and CIDR values in API objects.
 	StrictIPCIDRValidation featuregate.Feature = "StrictIPCIDRValidation"
 
-	// owner: @everpeace
-	// kep: https://kep.k8s.io/3619
-	//
-	// Enable SupplementalGroupsPolicy feature in PodSecurityContext
-	SupplementalGroupsPolicy featuregate.Feature = "SupplementalGroupsPolicy"
-
 	// owner: @helayoty
 	// kep: https://kep.k8s.io/5471
 	//
@@ -2030,12 +2024,6 @@ var defaultVersionedKubernetesFeatureGates = map[featuregate.Feature]featuregate
 		{Version: version.MustParse("1.38"), Default: true, PreRelease: featuregate.GA, LockToDefault: true},
 	},
 
-	SupplementalGroupsPolicy: {
-		{Version: version.MustParse("1.31"), Default: false, PreRelease: featuregate.Alpha},
-		{Version: version.MustParse("1.33"), Default: true, PreRelease: featuregate.Beta},
-		{Version: version.MustParse("1.35"), Default: true, PreRelease: featuregate.GA, LockToDefault: true}, // remove in 1.38
-	},
-
 	TaintTolerationComparisonOperators: {
 		{Version: version.MustParse("1.35"), Default: false, PreRelease: featuregate.Alpha},
 	},
@@ -2303,6 +2291,10 @@ var defaultVersionedKubernetesFeatureGates = map[featuregate.Feature]featuregate
 		{Version: version.MustParse("1.31"), Default: false, PreRelease: featuregate.Beta},
 		{Version: version.MustParse("1.36"), Default: true, PreRelease: featuregate.Beta},
 		{Version: version.MustParse("1.37"), Default: true, PreRelease: featuregate.GA, LockToDefault: true},
+	},
+
+	genericfeatures.WatchFromStorageWithoutPrevKV: {
+		{Version: version.MustParse("1.38"), Default: true, PreRelease: featuregate.Beta},
 	},
 
 	genericfeatures.WatchList: {
@@ -2672,8 +2664,6 @@ var defaultKubernetesFeatureGateDependencies = map[featuregate.Feature][]feature
 
 	StrictIPCIDRValidation: {},
 
-	SupplementalGroupsPolicy: {},
-
 	TaintTolerationComparisonOperators: {},
 
 	TopologyAwareWorkloadScheduling: {GenericWorkload},
@@ -2782,6 +2772,8 @@ var defaultKubernetesFeatureGateDependencies = map[featuregate.Feature][]feature
 	genericfeatures.UnknownVersionInteroperabilityProxy: {genericfeatures.APIServerIdentity},
 
 	genericfeatures.WatchCacheInitializationPostStartHook: {},
+
+	genericfeatures.WatchFromStorageWithoutPrevKV: {},
 
 	genericfeatures.WatchList: {},
 
