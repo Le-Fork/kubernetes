@@ -35,9 +35,12 @@ type ObjState struct {
 	Meta *ResponseMeta
 	Rev  int64
 	Data []byte
-	// Current is true when this state was loaded from storage, and false when
-	// it was initialized in-memory from cachedExistingObject.
+	// Current is true when this state reflects a consistent read, and false when
+	// it was initialized from a potentially stale cached object.
 	Current bool
+	// FromStorage is true when Data and Stale were read directly from the
+	// underlying storage backend rather than serialized in-memory.
+	FromStorage bool
 	// Stale is true when TransformFromStorage reported that the value in storage
 	// needs to be rewritten via TransformToStorage even if data has not changed.
 	Stale bool
@@ -53,6 +56,12 @@ func GetStateFromObject(versioner Versioner, codec runtime.Codec, obj runtime.Ob
 	rv, err := versioner.ObjectResourceVersion(obj)
 	if err != nil {
 		return nil, fmt.Errorf("couldn't get resource version: %v", err)
+	}
+	if rv == 0 {
+		// rv == 0 represents a non-existent object (e.g. from Get with IgnoreNotFound).
+		// Leave Data nil so an update producing an empty object is not short-circuited
+		// as a no-op, and avoid UpdateObject overwriting ResourceVersion from "" to "0".
+		return state, nil
 	}
 	state.Rev = int64(rv)
 	state.Meta.ResourceVersion = uint64(state.Rev)

@@ -608,6 +608,7 @@ func (c *Cacher) Watch(ctx context.Context, key string, opts storage.ListOptions
 		// rather than a directly returned error.
 		return newErrWatcher(err), nil
 	}
+	isSharding := opts.Predicate.ShardingEnabled()
 
 	addedWatcher := false
 	func() {
@@ -623,13 +624,15 @@ func (c *Cacher) Watch(ctx context.Context, key string, opts storage.ListOptions
 
 		// Update watcher.forget function once we can compute it.
 		watcher.forget = forgetWatcher(c, watcher, c.watcherIdx)
-		c.watchers.addWatcher(watcher, c.watcherIdx)
-		addedWatcher = true
-
-		// Add it to the queue only when the client support watch bookmarks.
-		if opts.Predicate.AllowWatchBookmarks {
-			c.bookmarkWatchers.addWatcherThreadUnsafe(watcher)
+		if isSharding {
+			originalForget := watcher.forget
+			watcher.forget = func(drainWatcher bool) {
+				metrics.RecordShardedWatchStopped(c.groupResource)
+				originalForget(drainWatcher)
+			}
 		}
+		c.registerWatcherLocked(watcher, c.watcherIdx, cacheInterval)
+		addedWatcher = true
 		c.watcherIdx++
 	}()
 
@@ -640,19 +643,20 @@ func (c *Cacher) Watch(ctx context.Context, key string, opts storage.ListOptions
 		// closing the watcher.
 		return newImmediateCloseWatcher(), nil
 	}
-
-	if opts.Predicate.ShardingEnabled() {
+	if isSharding {
 		metrics.RecordShardedWatchStarted(c.groupResource)
-		originalForget := watcher.forget
-		watcher.forget = func(drainWatcher bool) {
-			metrics.RecordShardedWatchStopped(c.groupResource)
-			originalForget(drainWatcher)
-		}
 	}
-
-	watcher.input <- watcherInput{interval: cacheInterval}
 	go watcher.process(ctx)
 	return watcher, nil
+}
+
+func (c *Cacher) registerWatcherLocked(watcher *cacheWatcher, idx int, cacheInterval *watchCacheInterval) {
+	c.watchers.addWatcher(watcher, idx)
+	// Add it to the queue only when the client support watch bookmarks.
+	if watcher.allowWatchBookmarks {
+		c.bookmarkWatchers.addWatcherThreadUnsafe(watcher)
+	}
+	watcher.input <- watcherInput{interval: cacheInterval}
 }
 
 func (c *Cacher) initWatcherIntervalLocked(ctx context.Context, watcher *cacheWatcher, requestedWatchRV, requiredResourceVersion uint64) (*watchCacheInterval, error) {
@@ -733,8 +737,8 @@ func (c *Cacher) Get(ctx context.Context, key string, opts storage.GetOptions, o
 		return err
 	}
 
-	obj, exists, readResourceVersion, err := c.get(ctx, key, opts.ResourceVersion)
-	if err != nil {
+	obj, exists, err := c.get(ctx, key, opts.ResourceVersion, opts.IgnoreNotFound)
+	if err != nil && !storage.IsNotFound(err) {
 		return err
 	}
 	// Get long processing is >500ms, however wait for fresh cache timeout is 3s so want to avoid traces just showing waits.
@@ -744,26 +748,26 @@ func (c *Cacher) Get(ctx context.Context, key string, opts storage.GetOptions, o
 		objVal.Set(reflect.ValueOf(obj).Elem())
 	} else {
 		objVal.Set(reflect.Zero(objVal.Type()))
-		if !opts.IgnoreNotFound {
-			return storage.NewKeyNotFoundError(key, int64(readResourceVersion))
-		}
 	}
-	return nil
+	return err
 }
 
-func (c *Cacher) get(ctx context.Context, key string, resourceVersion string) (runtime.Object, bool, uint64, error) {
+func (c *Cacher) get(ctx context.Context, key string, resourceVersion string, ignoreNotFound bool) (runtime.Object, bool, error) {
 	obj, exists, readResourceVersion, err := c.watchCache.WaitUntilFreshAndGet(ctx, resourceVersion, key)
 	if err != nil {
-		return nil, false, 0, err
+		return nil, false, err
 	}
 	if !exists {
-		return nil, false, readResourceVersion, nil
+		if ignoreNotFound {
+			return nil, false, nil
+		}
+		return nil, false, storage.NewKeyNotFoundError(key, int64(readResourceVersion))
 	}
 	elem, ok := obj.(*store.Element)
 	if !ok {
-		return nil, false, 0, fmt.Errorf("non *store.Element returned from storage: %v", obj)
+		return nil, false, fmt.Errorf("non *store.Element returned from storage: %v", obj)
 	}
-	return elem.Object, true, readResourceVersion, nil
+	return elem.Object, true, nil
 }
 
 // computeListLimit determines whether the cacher should
