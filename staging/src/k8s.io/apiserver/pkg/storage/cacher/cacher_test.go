@@ -127,7 +127,7 @@ func TestGet(t *testing.T) {
 func TestDeleteOnce(t *testing.T) {
 	ctx, cacher, terminate := testSetup(t)
 	t.Cleanup(terminate)
-	storagetesting.RunTestDeleteOnce(ctx, t, cacher, examplev1ProtoCodec)
+	storagetesting.RunTestDeleteOnce(ctx, t, cacher, etcd3testing.PathPrefix(), examplev1ProtoCodec)
 }
 
 func TestUpdateOnce(t *testing.T) {
@@ -589,7 +589,10 @@ func TestWatch(t *testing.T) {
 				// TODO(#109831): Enable use of this test and run it.
 			})
 			t.Run("WatchContextCancel", func(t *testing.T) {
-				// TODO(#109831): Enable use of this test and run it.
+				t.Parallel()
+				ctx, cacher, terminate := testSetup(t)
+				t.Cleanup(terminate)
+				storagetesting.RunTestWatchContextCancel(ctx, t, cacher)
 			})
 			t.Run("WatcherTimeout", func(t *testing.T) {
 				ctx, cacher, terminate := testSetup(t)
@@ -641,7 +644,7 @@ func TestWatch(t *testing.T) {
 			t.Run("WatchResync", func(t *testing.T) {
 				t.Parallel()
 				fakeClock := testingclock.NewFakeClock(time.Now())
-				ctx, cacher, server, terminate := testSetupWithEtcdServer(t, withClock(fakeClock))
+				ctx, cacher, server, terminate := testSetupWithEtcdServer(t, withClock(fakeClock), withNodeNameAndNamespaceIndex)
 				t.Cleanup(terminate)
 				store := &createWrapper{CacheDelegator: cacher}
 				resync := func() {

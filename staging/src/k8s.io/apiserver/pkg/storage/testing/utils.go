@@ -261,6 +261,9 @@ func testCheckStop(t *testing.T, w watch.Interface) {
 func TestCheckResultsInStrictOrder(t *testing.T, w watch.Interface, expectedEvents []watch.Event) {
 	for _, expectedEvent := range expectedEvents {
 		testCheckResult(t, w, &expectedEvent)
+		if expectedEvent.Type == watch.Error {
+			testCheckStop(t, w)
+		}
 	}
 }
 
@@ -455,7 +458,7 @@ func determinePodGetAttrFunc(namespaceScoped bool, indexField []string) storage.
 
 func namespacedScopedNodeNameAttrFunc(obj runtime.Object) (labels.Set, fields.Set, error) {
 	pod := obj.(*example.Pod)
-	return nil, fields.Set{
+	return labels.Set(pod.Labels), fields.Set{
 		"spec.nodeName":      pod.Spec.NodeName,
 		"metadata.name":      pod.ObjectMeta.Name,
 		"metadata.namespace": pod.ObjectMeta.Namespace,
@@ -464,7 +467,7 @@ func namespacedScopedNodeNameAttrFunc(obj runtime.Object) (labels.Set, fields.Se
 
 func clusterScopedNodeNameAttrFunc(obj runtime.Object) (labels.Set, fields.Set, error) {
 	pod := obj.(*example.Pod)
-	return nil, fields.Set{
+	return labels.Set(pod.Labels), fields.Set{
 		"spec.nodeName": pod.Spec.NodeName,
 		"metadata.name": pod.ObjectMeta.Name,
 	}, nil
