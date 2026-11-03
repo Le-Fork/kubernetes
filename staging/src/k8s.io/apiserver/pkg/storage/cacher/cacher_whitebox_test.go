@@ -58,6 +58,7 @@ import (
 	storagemetrics "k8s.io/apiserver/pkg/storage/metrics"
 	storagetesting "k8s.io/apiserver/pkg/storage/testing"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
+	utilflowcontrol "k8s.io/apiserver/pkg/util/flowcontrol"
 	clientfeatures "k8s.io/client-go/features"
 	clientfeaturestesting "k8s.io/client-go/features/testing"
 	featuregatetesting "k8s.io/component-base/featuregate/testing"
@@ -1828,18 +1829,23 @@ func TestDispatchEventWillNotBeBlockedByTimedOutWatcher(t *testing.T) {
 
 	totalPods := 50
 
-	// Create watcher that will be blocked.
-	w1, err := cacher.Watch(context.TODO(), "/pods/ns", storage.ListOptions{ResourceVersion: "999", Predicate: storage.Everything, Recursive: true})
-	if err != nil {
-		t.Fatalf("Failed to create watch: %v", err)
+	createWatch := func() watch.Interface {
+		initSignal := utilflowcontrol.NewInitializationSignal()
+		ctx := utilflowcontrol.WithInitializationSignal(context.Background(), initSignal)
+		w, err := cacher.Watch(ctx, "/pods/ns", storage.ListOptions{ResourceVersion: "999", Predicate: storage.Everything, Recursive: true})
+		if err != nil {
+			t.Fatalf("Failed to create watch: %v", err)
+		}
+		initSignal.Wait()
+		return w
 	}
+
+	// Create watcher that will be blocked.
+	w1 := createWatch()
 	defer w1.Stop()
 
 	// Create fast watcher and ensure it will get all objects.
-	w2, err := cacher.Watch(context.TODO(), "/pods/ns", storage.ListOptions{ResourceVersion: "999", Predicate: storage.Everything, Recursive: true})
-	if err != nil {
-		t.Fatalf("Failed to create watch: %v", err)
-	}
+	w2 := createWatch()
 	defer w2.Stop()
 
 	// Now push a ton of object to cache.
@@ -1945,10 +1951,13 @@ func TestCachingDeleteEvents(t *testing.T) {
 	}
 
 	createWatch := func(pred storage.SelectionPredicate) watch.Interface {
-		w, err := cacher.Watch(context.TODO(), "/pods/ns", storage.ListOptions{ResourceVersion: "999", Predicate: pred, Recursive: true})
+		initSignal := utilflowcontrol.NewInitializationSignal()
+		ctx := utilflowcontrol.WithInitializationSignal(context.Background(), initSignal)
+		w, err := cacher.Watch(ctx, "/pods/ns", storage.ListOptions{ResourceVersion: "999", Predicate: pred, Recursive: true})
 		if err != nil {
 			t.Fatalf("Failed to create watch: %v", err)
 		}
+		initSignal.Wait()
 		return w
 	}
 
@@ -2020,11 +2029,14 @@ func testCachingObjects(t *testing.T, watchersCount int) {
 
 	watchers := make([]watch.Interface, 0, watchersCount)
 	for i := 0; i < watchersCount; i++ {
-		w, err := cacher.Watch(context.TODO(), "/pods/ns", storage.ListOptions{ResourceVersion: "1000", Predicate: storage.Everything, Recursive: true})
+		initSignal := utilflowcontrol.NewInitializationSignal()
+		ctx := utilflowcontrol.WithInitializationSignal(context.Background(), initSignal)
+		w, err := cacher.Watch(ctx, "/pods/ns", storage.ListOptions{ResourceVersion: "1000", Predicate: storage.Everything, Recursive: true})
 		if err != nil {
 			t.Fatalf("Failed to create watch: %v", err)
 		}
 		defer w.Stop()
+		initSignal.Wait()
 		watchers = append(watchers, w)
 	}
 
@@ -2724,6 +2736,7 @@ func TestForgetWatcher(t *testing.T) {
 		testingclock.NewFakeClock(time.Now()),
 		"1",
 		watchSelector{},
+		0,
 	)
 	forgetWatcherFn = forgetWatcher(cacher, w, 0)
 	addWatcher := func(w *cacheWatcher) {
@@ -3038,61 +3051,6 @@ func TestGetWatchCacheResourceVersion(t *testing.T) {
 			actualResourceVersion, err := cacher.getWatchCacheResourceVersion(context.TODO(), uint64(parsedResourceVersion), scenario.opts)
 			require.NoError(t, err)
 			require.Equal(t, uint64(scenario.expectedWatchResourceVersion), actualResourceVersion, "received unexpected ResourceVersion")
-		})
-	}
-}
-
-func TestGetBookmarkAfterResourceVersion(t *testing.T) {
-	listOptions := func(rv string) storage.ListOptions {
-		p := storage.Everything
-
-		opts := storage.ListOptions{}
-		opts.Predicate = p
-		opts.ResourceVersion = rv
-		return opts
-	}
-
-	scenarios := []struct {
-		name                      string
-		opts                      storage.ListOptions
-		requiredResourceVersion   int
-		watchCacheResourceVersion int
-
-		expectedBookmarkResourceVersion int
-	}{
-		{
-			name:                            "RV=unset",
-			opts:                            listOptions(""),
-			requiredResourceVersion:         100,
-			watchCacheResourceVersion:       99,
-			expectedBookmarkResourceVersion: 100,
-		},
-		{
-			name:                            "RV=0",
-			opts:                            listOptions("0"),
-			requiredResourceVersion:         0,
-			watchCacheResourceVersion:       99,
-			expectedBookmarkResourceVersion: 99,
-		},
-		{
-			name:                            "RV=95",
-			opts:                            listOptions("95"),
-			requiredResourceVersion:         0,
-			watchCacheResourceVersion:       99,
-			expectedBookmarkResourceVersion: 95,
-		},
-	}
-	for _, scenario := range scenarios {
-		t.Run(scenario.name, func(t *testing.T) {
-			parsedResourceVersion := 0
-			if len(scenario.opts.ResourceVersion) > 0 {
-				var err error
-				parsedResourceVersion, err = strconv.Atoi(scenario.opts.ResourceVersion)
-				require.NoError(t, err)
-			}
-
-			getBookMarkResourceVersion := getBookmarkAfterResourceVersion(uint64(parsedResourceVersion), uint64(scenario.requiredResourceVersion), uint64(scenario.watchCacheResourceVersion), scenario.opts)
-			require.Equal(t, uint64(scenario.expectedBookmarkResourceVersion), getBookMarkResourceVersion, "received unexpected ResourceVersion")
 		})
 	}
 }

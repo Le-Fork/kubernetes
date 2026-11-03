@@ -12,7 +12,7 @@ godebug default=go1.27
 
 require (
 	bitbucket.org/bertimus9/systemstat v0.5.0
-	cel.dev/cel-go v0.33.1
+	cel.dev/cel-go v0.33.2
 	github.com/JeffAshton/win_pdh v0.0.0-20161109143554-76bb4ee9f0ab
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/Microsoft/hnslib v0.1.3
@@ -70,7 +70,7 @@ require (
 	go.uber.org/zap v1.27.1
 	go.yaml.in/yaml/v2 v2.4.4
 	golang.org/x/crypto v0.58.0
-	golang.org/x/net v0.61.0
+	golang.org/x/net v0.62.0
 	golang.org/x/oauth2 v0.37.0
 	golang.org/x/sync v0.24.0
 	golang.org/x/sys v0.49.0
@@ -120,6 +120,7 @@ require (
 	k8s.io/streaming v0.0.0
 	k8s.io/system-validators v1.12.1
 	k8s.io/utils v0.0.0-20260626114624-be93311217bd
+	sigs.k8s.io/iptables-wrappers v1.0.0
 	sigs.k8s.io/json v0.0.0-20250730193827-2d320260d730
 	sigs.k8s.io/knftables v0.0.22
 	sigs.k8s.io/randfill v1.0.0
