@@ -573,6 +573,7 @@ func TestMatchExactResourceVersionFallback(t *testing.T) {
 				t.Fatalf("unexpected error waiting for the cache to be ready")
 			}
 			delegator := NewCacheDelegator(cacher, backingStorage)
+			defer delegator.Stop()
 
 			if snapshotAvailable {
 				oldPod := &example.Pod{
@@ -846,6 +847,7 @@ func TestWatchCacheBypass(t *testing.T) {
 }
 
 func TestEmptyWatchEventCache(t *testing.T) {
+	t.Parallel()
 	server, etcdStorage := newEtcdTestStorage(t, etcd3testing.PathPrefix())
 	defer server.Terminate(t)
 
@@ -980,6 +982,7 @@ func TestWatchNotHangingOnStartupFailure(t *testing.T) {
 }
 
 func TestWatcherNotGoingBackInTime(t *testing.T) {
+	t.Parallel()
 	backingStorage := &cachertesting.MockStorage{}
 	cacher, v, err := newTestCacher(backingStorage)
 	if err != nil {
@@ -1234,6 +1237,7 @@ func TestCacherDontMissEventsOnReinitialization(t *testing.T) {
 }
 
 func TestCacherNoLeakWithMultipleWatchers(t *testing.T) {
+	t.Parallel()
 	backingStorage := &cachertesting.MockStorage{}
 	cacher, _, err := newTestCacher(backingStorage)
 	if err != nil {
@@ -1381,6 +1385,7 @@ func testCacherSendBookmarkEvents(t *testing.T, allowWatchBookmarks, expectedBoo
 }
 
 func TestCacherSendBookmarkEvents(t *testing.T) {
+	t.Parallel()
 	testCases := []struct {
 		allowWatchBookmarks bool
 		expectedBookmarks   bool
@@ -1500,6 +1505,7 @@ func TestInitialEventsEndBookmark(t *testing.T) {
 }
 
 func TestCacherSendsMultipleWatchBookmarks(t *testing.T) {
+	t.Parallel()
 	backingStorage := &cachertesting.MockStorage{}
 	cacher, _, err := newTestCacher(backingStorage)
 	if err != nil {
@@ -1640,6 +1646,7 @@ func TestDispatchingBookmarkEventsWithConcurrentStop(t *testing.T) {
 }
 
 func TestBookmarksOnResourceVersionUpdates(t *testing.T) {
+	t.Parallel()
 	backingStorage := &cachertesting.MockStorage{}
 	cacher, _, err := newTestCacher(backingStorage)
 	if err != nil {
@@ -1792,6 +1799,7 @@ func TestStartingResourceVersion(t *testing.T) {
 }
 
 func TestDispatchEventWillNotBeBlockedByTimedOutWatcher(t *testing.T) {
+	t.Parallel()
 	backingStorage := &cachertesting.MockStorage{}
 	cacher, _, err := newTestCacher(backingStorage)
 	if err != nil {
@@ -3124,7 +3132,7 @@ func forceRequestWatchProgressSupport(t *testing.T) {
 
 	server, _ := newEtcdTestStorage(t, etcd3testing.PathPrefix())
 	defer server.Terminate(t)
-	if err := wait.PollUntilContextTimeout(context.Background(), 100*time.Millisecond, wait.ForeverTestTimeout, true, func(_ context.Context) (bool, error) {
+	if err := wait.PollUntilContextTimeout(context.Background(), 5*time.Millisecond, wait.ForeverTestTimeout, true, func(_ context.Context) (bool, error) {
 		return etcdfeature.DefaultFeatureSupportChecker.Supports(storage.RequestWatchProgress), nil
 	}); err != nil {
 		t.Fatalf("failed to wait for required %v storage feature to initialize", storage.RequestWatchProgress)

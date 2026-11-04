@@ -38,6 +38,8 @@ import (
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/version"
 	"k8s.io/apiserver/pkg/util/feature"
+	clientfeatures "k8s.io/client-go/features"
+	clientfeaturestesting "k8s.io/client-go/features/testing"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
@@ -524,8 +526,8 @@ func TestWithPercentageOfPlacementsToScore(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Failed to create scheduler: %v", err)
 			}
-			if sched.percentageOfPlacementsToScore != tt.wantedPercentageOfPlacementsToScore {
-				t.Errorf("scheduler.percentageOfPlacementsToScore = %v, want %v", sched.percentageOfPlacementsToScore, tt.wantedPercentageOfPlacementsToScore)
+			if sched.podGroupAlgorithm.percentageOfPlacementsToScore != tt.wantedPercentageOfPlacementsToScore {
+				t.Errorf("scheduler.podGroupAlgorithm.percentageOfPlacementsToScore = %v, want %v", sched.podGroupAlgorithm.percentageOfPlacementsToScore, tt.wantedPercentageOfPlacementsToScore)
 			}
 		})
 	}
@@ -1522,6 +1524,8 @@ func (f fakePermitPlugin) Permit(ctx context.Context, state fwk.CycleState, p *v
 var _ fwk.PermitPlugin = &fakePermitPlugin{}
 
 func TestNewInformerFactoryTrim(t *testing.T) {
+	// The transform only runs with ManagedFieldsOptOutClient disabled.
+	clientfeaturestesting.SetFeatureDuringTest(t, clientfeatures.ManagedFieldsOptOutClient, false)
 	cs := fake.NewClientset()
 
 	pd := &v1.Pod{ObjectMeta: metav1.ObjectMeta{
