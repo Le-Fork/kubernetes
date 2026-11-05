@@ -30,6 +30,7 @@ import (
 
 	v1 "k8s.io/api/core/v1"
 	schedulingv1beta1 "k8s.io/api/scheduling/v1beta1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -439,17 +440,16 @@ func TestReconcilePodGroupWithSnapshot(t *testing.T) {
 
 func TestValidatePodGroup(t *testing.T) {
 	tests := []struct {
-		name                           string
-		podGroup                       *schedulingv1beta1.PodGroup
-		podGroups                      []*schedulingv1beta1.PodGroup
-		compositePodGroup              *schedulingv1beta1.CompositePodGroup
-		compositePodGroups             []*schedulingv1beta1.CompositePodGroup
-		scheduledPods                  []*v1.Pod
-		pods                           []*v1.Pod
-		profiles                       profile.Map
-		enablePodGroupPreemptionPolicy bool
-		enableCompositePodGroup        bool
-		wantErr                        string
+		name                    string
+		podGroup                *schedulingv1beta1.PodGroup
+		podGroups               []*schedulingv1beta1.PodGroup
+		compositePodGroup       *schedulingv1beta1.CompositePodGroup
+		compositePodGroups      []*schedulingv1beta1.CompositePodGroup
+		scheduledPods           []*v1.Pod
+		pods                    []*v1.Pod
+		profiles                profile.Map
+		enableCompositePodGroup bool
+		wantErr                 string
 	}{
 		{
 			name:     "failure when no pods to evaluate",
@@ -573,8 +573,7 @@ func TestValidatePodGroup(t *testing.T) {
 				st.MakePod().Name("p1").PodGroupName("pg").PreemptionPolicy(v1.PreemptNever).Obj(),
 				st.MakePod().Name("p2").PodGroupName("pg").PreemptionPolicy(v1.PreemptNever).Obj(),
 			},
-			enablePodGroupPreemptionPolicy: true,
-			wantErr:                        "",
+			wantErr: "",
 		},
 		{
 			name:     "failure when different preemption policies across pods",
@@ -583,8 +582,7 @@ func TestValidatePodGroup(t *testing.T) {
 				st.MakePod().Name("p1").PodGroupName("pg").PreemptionPolicy(v1.PreemptLowerPriority).Obj(),
 				st.MakePod().Name("p2").PodGroupName("pg").PreemptionPolicy(v1.PreemptNever).Obj(),
 			},
-			enablePodGroupPreemptionPolicy: true,
-			wantErr:                        `all pods in a pod group hierarchy should have the same preemption policy as the root pod group's preemption policy, got PreemptLowerPriority ("p1") and Never ("podgroup//pg")`,
+			wantErr: `all pods in a pod group hierarchy should have the same preemption policy, got PreemptLowerPriority ("p1") and Never`,
 		},
 		{
 			name:     "failure when different preemption policies across pods and pod group",
@@ -593,67 +591,170 @@ func TestValidatePodGroup(t *testing.T) {
 				st.MakePod().Name("p1").PodGroupName("pg").PreemptionPolicy(v1.PreemptLowerPriority).Obj(),
 				st.MakePod().Name("p2").PodGroupName("pg").PreemptionPolicy(v1.PreemptLowerPriority).Obj(),
 			},
-			enablePodGroupPreemptionPolicy: true,
-			wantErr:                        `all pods in a pod group hierarchy should have the same preemption policy as the root pod group's preemption policy, got PreemptLowerPriority ("p1") and Never ("podgroup//pg")`,
+			wantErr: `all pods in a pod group hierarchy should have the same preemption policy, got PreemptLowerPriority ("p1") and Never`,
 		},
 		{
-			name:     "success when preemption policies between pods and podgroup do not match but PodGroupPreemptionPolicy is disabled",
-			podGroup: st.MakePodGroup().Name("pg").PreemptionPolicy(schedulingv1beta1.PreemptNever).Obj(),
+			name:     "success when pod group has nil PreemptionPolicy and all pods have PreemptNever",
+			podGroup: st.MakePodGroup().Name("pg").Obj(),
 			pods: []*v1.Pod{
-				st.MakePod().Name("p1").PodGroupName("pg").PreemptionPolicy(v1.PreemptLowerPriority).Obj(),
+				st.MakePod().Name("p1").PodGroupName("pg").PreemptionPolicy(v1.PreemptNever).Obj(),
+				st.MakePod().Name("p2").PodGroupName("pg").PreemptionPolicy(v1.PreemptNever).Obj(),
+			},
+			wantErr: "",
+		},
+		{
+			name:     "success when pod group has PreemptLowerPriority and pods have nil PreemptionPolicy (defaulting to PreemptLowerPriority)",
+			podGroup: st.MakePodGroup().Name("pg").PreemptionPolicy(schedulingv1beta1.PreemptLowerPriority).Obj(),
+			pods: []*v1.Pod{
+				st.MakePod().Name("p1").PodGroupName("pg").Obj(),
 				st.MakePod().Name("p2").PodGroupName("pg").PreemptionPolicy(v1.PreemptLowerPriority).Obj(),
 			},
-			enablePodGroupPreemptionPolicy: false,
-			wantErr:                        "",
+			wantErr: "",
 		},
 		{
-			name:     "failure when preemption policies do not match across pods and PodGroupPreemptionPolicy is disabled",
+			name:     "failure when pod group has PreemptNever and pod has nil PreemptionPolicy (defaulting to PreemptLowerPriority)",
 			podGroup: st.MakePodGroup().Name("pg").PreemptionPolicy(schedulingv1beta1.PreemptNever).Obj(),
+			pods: []*v1.Pod{
+				st.MakePod().Name("p1").PodGroupName("pg").Obj(),
+			},
+			wantErr: `all pods in a pod group hierarchy should have the same preemption policy, got PreemptLowerPriority ("p1") and Never`,
+		},
+		{
+			name:     "failure when pod group has nil PreemptionPolicy and pods have mismatched preemption policies",
+			podGroup: st.MakePodGroup().Name("pg").Obj(),
 			pods: []*v1.Pod{
 				st.MakePod().Name("p1").PodGroupName("pg").PreemptionPolicy(v1.PreemptLowerPriority).Obj(),
 				st.MakePod().Name("p2").PodGroupName("pg").PreemptionPolicy(v1.PreemptNever).Obj(),
 			},
-			enablePodGroupPreemptionPolicy: false,
-			wantErr:                        `all pods in a pod group hierarchy should have the same preemption policy, got Never ("p2") and PreemptLowerPriority ("p1")`,
+			wantErr: `all pods in a pod group hierarchy should have the same preemption policy, got Never ("p2") and PreemptLowerPriority`,
 		},
 		{
-			name:              "CPG success when all leaf groups and pods have PreemptNever with PodGroupPreemptionPolicy enabled",
-			compositePodGroup: st.MakeCompositePodGroup().Name("cpg-root").Priority(10).PreemptionPolicy(schedulingv1beta1.PreemptNever).Obj(),
+			name:     "failure when pod group has nil PreemptionPolicy and scheduled pod has different preemption policy than unscheduled pod",
+			podGroup: st.MakePodGroup().Name("pg").Obj(),
+			scheduledPods: []*v1.Pod{
+				st.MakePod().Name("p2").UID("p2").PodGroupName("pg").PreemptionPolicy(v1.PreemptNever).Node("node1").Obj(),
+			},
+			pods: []*v1.Pod{
+				st.MakePod().Name("p1").UID("p1").PodGroupName("pg").PreemptionPolicy(v1.PreemptLowerPriority).Obj(),
+			},
+			wantErr: `all pods in a pod group hierarchy should have the same preemption policy, got Never ("p2") and PreemptLowerPriority`,
+		},
+		{
+			name:              "CPG success when all groups have nil PreemptionPolicy and all pods have PreemptNever",
+			compositePodGroup: st.MakeCompositePodGroup().Name("cpg-root").Priority(10).Obj(),
 			compositePodGroups: []*schedulingv1beta1.CompositePodGroup{
-				st.MakeCompositePodGroup().Name("cpg-root").Priority(10).PreemptionPolicy(schedulingv1beta1.PreemptNever).Obj(),
+				st.MakeCompositePodGroup().Name("cpg-root").Priority(10).Obj(),
 			},
 			podGroups: []*schedulingv1beta1.PodGroup{
-				st.MakePodGroup().Name("pg1").ParentCompositePodGroup("cpg-root").Priority(10).PreemptionPolicy(schedulingv1beta1.PreemptNever).Obj(),
-				st.MakePodGroup().Name("pg2").ParentCompositePodGroup("cpg-root").Priority(10).PreemptionPolicy(schedulingv1beta1.PreemptNever).Obj(),
+				st.MakePodGroup().Name("pg1").ParentCompositePodGroup("cpg-root").Priority(10).Obj(),
+				st.MakePodGroup().Name("pg2").ParentCompositePodGroup("cpg-root").Priority(10).Obj(),
 			},
 			pods: []*v1.Pod{
 				st.MakePod().Name("p1").PodGroupName("pg1").Priority(10).PreemptionPolicy(v1.PreemptNever).Obj(),
 				st.MakePod().Name("p2").PodGroupName("pg2").Priority(10).PreemptionPolicy(v1.PreemptNever).Obj(),
 			},
-			enablePodGroupPreemptionPolicy: true,
-			enableCompositePodGroup:        true,
-			wantErr:                        "",
+			enableCompositePodGroup: true,
+			wantErr:                 "",
 		},
 		{
-			name:              "CPG success when all leaf groups and pods have PreemptNever with PodGroupPreemptionPolicy disabled",
+			name:              "CPG success when all groups have nil PreemptionPolicy and all pods resolve to PreemptLowerPriority",
+			compositePodGroup: st.MakeCompositePodGroup().Name("cpg-root").Priority(10).Obj(),
+			compositePodGroups: []*schedulingv1beta1.CompositePodGroup{
+				st.MakeCompositePodGroup().Name("cpg-root").Priority(10).Obj(),
+			},
+			podGroups: []*schedulingv1beta1.PodGroup{
+				st.MakePodGroup().Name("pg1").ParentCompositePodGroup("cpg-root").Priority(10).Obj(),
+				st.MakePodGroup().Name("pg2").ParentCompositePodGroup("cpg-root").Priority(10).Obj(),
+			},
+			pods: []*v1.Pod{
+				st.MakePod().Name("p1").PodGroupName("pg1").Priority(10).PreemptionPolicy(v1.PreemptLowerPriority).Obj(),
+				st.MakePod().Name("p2").PodGroupName("pg2").Priority(10).Obj(),
+			},
+			enableCompositePodGroup: true,
+			wantErr:                 "",
+		},
+		{
+			name:              "CPG success when root CPG has nil PreemptionPolicy and leaf group and pods agree on PreemptNever",
 			compositePodGroup: st.MakeCompositePodGroup().Name("cpg-root").Priority(10).Obj(),
 			compositePodGroups: []*schedulingv1beta1.CompositePodGroup{
 				st.MakeCompositePodGroup().Name("cpg-root").Priority(10).Obj(),
 			},
 			podGroups: []*schedulingv1beta1.PodGroup{
 				st.MakePodGroup().Name("pg1").ParentCompositePodGroup("cpg-root").Priority(10).PreemptionPolicy(schedulingv1beta1.PreemptNever).Obj(),
+			},
+			pods: []*v1.Pod{
+				st.MakePod().Name("p1").PodGroupName("pg1").Priority(10).PreemptionPolicy(v1.PreemptNever).Obj(),
+			},
+			enableCompositePodGroup: true,
+			wantErr:                 "",
+		},
+		{
+			name:              "CPG success when root CPG has PreemptNever, leaf group has nil PreemptionPolicy, and pods have PreemptNever",
+			compositePodGroup: st.MakeCompositePodGroup().Name("cpg-root").Priority(10).PreemptionPolicy(schedulingv1beta1.PreemptNever).Obj(),
+			compositePodGroups: []*schedulingv1beta1.CompositePodGroup{
+				st.MakeCompositePodGroup().Name("cpg-root").Priority(10).PreemptionPolicy(schedulingv1beta1.PreemptNever).Obj(),
+			},
+			podGroups: []*schedulingv1beta1.PodGroup{
+				st.MakePodGroup().Name("pg1").ParentCompositePodGroup("cpg-root").Priority(10).Obj(),
+			},
+			pods: []*v1.Pod{
+				st.MakePod().Name("p1").PodGroupName("pg1").Priority(10).PreemptionPolicy(v1.PreemptNever).Obj(),
+			},
+			enableCompositePodGroup: true,
+			wantErr:                 "",
+		},
+		{
+			name:              "CPG failure when root CPG has nil PreemptionPolicy and two leaf groups have conflicting non-nil PreemptionPolicies",
+			compositePodGroup: st.MakeCompositePodGroup().Name("cpg-root").Priority(10).Obj(),
+			compositePodGroups: []*schedulingv1beta1.CompositePodGroup{
+				st.MakeCompositePodGroup().Name("cpg-root").Priority(10).Obj(),
+			},
+			podGroups: []*schedulingv1beta1.PodGroup{
+				st.MakePodGroup().Name("pg1").ParentCompositePodGroup("cpg-root").Priority(10).PreemptionPolicy(schedulingv1beta1.PreemptNever).Obj(),
+				st.MakePodGroup().Name("pg2").ParentCompositePodGroup("cpg-root").Priority(10).PreemptionPolicy(schedulingv1beta1.PreemptLowerPriority).Obj(),
+			},
+			pods: []*v1.Pod{
+				st.MakePod().Name("p1").PodGroupName("pg1").Priority(10).PreemptionPolicy(v1.PreemptNever).Obj(),
+				st.MakePod().Name("p2").PodGroupName("pg2").Priority(10).PreemptionPolicy(v1.PreemptNever).Obj(),
+			},
+			enableCompositePodGroup: true,
+			wantErr:                 `all pod groups in a hierarchy should have the same preemption policy, got PreemptLowerPriority ("podgroup//pg2") and Never`,
+		},
+		{
+			name:              "CPG failure when root CPG and first leaf group have nil PreemptionPolicy, second leaf group has PreemptNever, and pods have PreemptLowerPriority",
+			compositePodGroup: st.MakeCompositePodGroup().Name("cpg-root").Priority(10).Obj(),
+			compositePodGroups: []*schedulingv1beta1.CompositePodGroup{
+				st.MakeCompositePodGroup().Name("cpg-root").Priority(10).Obj(),
+			},
+			podGroups: []*schedulingv1beta1.PodGroup{
+				st.MakePodGroup().Name("pg1").ParentCompositePodGroup("cpg-root").Priority(10).Obj(),
+				st.MakePodGroup().Name("pg2").ParentCompositePodGroup("cpg-root").Priority(10).PreemptionPolicy(schedulingv1beta1.PreemptNever).Obj(),
+			},
+			pods: []*v1.Pod{
+				st.MakePod().Name("p1").PodGroupName("pg1").Priority(10).PreemptionPolicy(v1.PreemptLowerPriority).Obj(),
+			},
+			enableCompositePodGroup: true,
+			wantErr:                 `all pod groups in a hierarchy should have the same preemption policy, got Never ("podgroup//pg2") and PreemptLowerPriority`,
+		},
+		{
+			name:              "CPG success when all leaf groups and pods have PreemptNever",
+			compositePodGroup: st.MakeCompositePodGroup().Name("cpg-root").Priority(10).PreemptionPolicy(schedulingv1beta1.PreemptNever).Obj(),
+			compositePodGroups: []*schedulingv1beta1.CompositePodGroup{
+				st.MakeCompositePodGroup().Name("cpg-root").Priority(10).PreemptionPolicy(schedulingv1beta1.PreemptNever).Obj(),
+			},
+			podGroups: []*schedulingv1beta1.PodGroup{
+				st.MakePodGroup().Name("pg1").ParentCompositePodGroup("cpg-root").Priority(10).PreemptionPolicy(schedulingv1beta1.PreemptNever).Obj(),
 				st.MakePodGroup().Name("pg2").ParentCompositePodGroup("cpg-root").Priority(10).PreemptionPolicy(schedulingv1beta1.PreemptNever).Obj(),
 			},
 			pods: []*v1.Pod{
 				st.MakePod().Name("p1").PodGroupName("pg1").Priority(10).PreemptionPolicy(v1.PreemptNever).Obj(),
 				st.MakePod().Name("p2").PodGroupName("pg2").Priority(10).PreemptionPolicy(v1.PreemptNever).Obj(),
 			},
-			enablePodGroupPreemptionPolicy: false,
-			enableCompositePodGroup:        true,
-			wantErr:                        "",
+			enableCompositePodGroup: true,
+			wantErr:                 "",
 		},
 		{
-			name:              "CPG success when all leaf groups and pods have PreemptLowerPriority with PodGroupPreemptionPolicy enabled",
+			name:              "CPG success when all leaf groups and pods have PreemptLowerPriority",
 			compositePodGroup: st.MakeCompositePodGroup().Name("cpg-root").Priority(10).PreemptionPolicy(schedulingv1beta1.PreemptLowerPriority).Obj(),
 			compositePodGroups: []*schedulingv1beta1.CompositePodGroup{
 				st.MakeCompositePodGroup().Name("cpg-root").Priority(10).PreemptionPolicy(schedulingv1beta1.PreemptLowerPriority).Obj(),
@@ -666,12 +767,11 @@ func TestValidatePodGroup(t *testing.T) {
 				st.MakePod().Name("p1").PodGroupName("pg1").Priority(10).PreemptionPolicy(v1.PreemptLowerPriority).Obj(),
 				st.MakePod().Name("p2").PodGroupName("pg2").Priority(10).PreemptionPolicy(v1.PreemptLowerPriority).Obj(),
 			},
-			enablePodGroupPreemptionPolicy: true,
-			enableCompositePodGroup:        true,
-			wantErr:                        "",
+			enableCompositePodGroup: true,
+			wantErr:                 "",
 		},
 		{
-			name:              "CPG failure when root CPG has PreemptLowerPriority but leaf group has PreemptNever with PodGroupPreemptionPolicy enabled",
+			name:              "CPG failure when root CPG has PreemptLowerPriority but leaf group has PreemptNever",
 			compositePodGroup: st.MakeCompositePodGroup().Name("cpg-root").Priority(10).PreemptionPolicy(schedulingv1beta1.PreemptLowerPriority).Obj(),
 			compositePodGroups: []*schedulingv1beta1.CompositePodGroup{
 				st.MakeCompositePodGroup().Name("cpg-root").Priority(10).PreemptionPolicy(schedulingv1beta1.PreemptLowerPriority).Obj(),
@@ -684,12 +784,11 @@ func TestValidatePodGroup(t *testing.T) {
 				st.MakePod().Name("p1").PodGroupName("pg1").Priority(10).PreemptionPolicy(v1.PreemptNever).Obj(),
 				st.MakePod().Name("p2").PodGroupName("pg2").Priority(10).PreemptionPolicy(v1.PreemptLowerPriority).Obj(),
 			},
-			enablePodGroupPreemptionPolicy: true,
-			enableCompositePodGroup:        true,
-			wantErr:                        `all pod groups in a hierarchy should have the same preemption policy as the root pod group's preemption policy, got Never ("podgroup//pg1") and PreemptLowerPriority ("compositepodgroup//cpg-root")`,
+			enableCompositePodGroup: true,
+			wantErr:                 `all pod groups in a hierarchy should have the same preemption policy, got Never ("podgroup//pg1") and PreemptLowerPriority`,
 		},
 		{
-			name:              "CPG failure when root CPG has PreemptNever but leaf group has PreemptLowerPriority with PodGroupPreemptionPolicy enabled",
+			name:              "CPG failure when root CPG has PreemptNever but leaf group has PreemptLowerPriority",
 			compositePodGroup: st.MakeCompositePodGroup().Name("cpg-root").Priority(10).PreemptionPolicy(schedulingv1beta1.PreemptNever).Obj(),
 			compositePodGroups: []*schedulingv1beta1.CompositePodGroup{
 				st.MakeCompositePodGroup().Name("cpg-root").Priority(10).PreemptionPolicy(schedulingv1beta1.PreemptNever).Obj(),
@@ -702,12 +801,11 @@ func TestValidatePodGroup(t *testing.T) {
 				st.MakePod().Name("p1").PodGroupName("pg1").Priority(10).PreemptionPolicy(v1.PreemptLowerPriority).Obj(),
 				st.MakePod().Name("p2").PodGroupName("pg2").Priority(10).PreemptionPolicy(v1.PreemptNever).Obj(),
 			},
-			enablePodGroupPreemptionPolicy: true,
-			enableCompositePodGroup:        true,
-			wantErr:                        `all pod groups in a hierarchy should have the same preemption policy as the root pod group's preemption policy, got PreemptLowerPriority ("podgroup//pg1") and Never ("compositepodgroup//cpg-root")`,
+			enableCompositePodGroup: true,
+			wantErr:                 `all pod groups in a hierarchy should have the same preemption policy, got PreemptLowerPriority ("podgroup//pg1") and Never`,
 		},
 		{
-			name:              "CPG failure when different preemption policies are used across pods in the CPG with PodGroupPreemptionPolicy enabled",
+			name:              "CPG failure when different preemption policies are used across pods in the CPG",
 			compositePodGroup: st.MakeCompositePodGroup().Name("cpg-root").Priority(10).PreemptionPolicy(schedulingv1beta1.PreemptNever).Obj(),
 			compositePodGroups: []*schedulingv1beta1.CompositePodGroup{
 				st.MakeCompositePodGroup().Name("cpg-root").Priority(10).PreemptionPolicy(schedulingv1beta1.PreemptNever).Obj(),
@@ -720,12 +818,11 @@ func TestValidatePodGroup(t *testing.T) {
 				st.MakePod().Name("p1").PodGroupName("pg1").Priority(10).PreemptionPolicy(v1.PreemptNever).Obj(),
 				st.MakePod().Name("p2").PodGroupName("pg2").Priority(10).PreemptionPolicy(v1.PreemptLowerPriority).Obj(), // different
 			},
-			enablePodGroupPreemptionPolicy: true,
-			enableCompositePodGroup:        true,
-			wantErr:                        `all pods in a pod group hierarchy should have the same preemption policy as the root pod group's preemption policy, got PreemptLowerPriority ("p2") and Never ("compositepodgroup//cpg-root")`,
+			enableCompositePodGroup: true,
+			wantErr:                 `all pods in a pod group hierarchy should have the same preemption policy, got PreemptLowerPriority ("p2") and Never`,
 		},
 		{
-			name:              "CPG failure when different preemption policies are used across leaf groups in the CPG with PodGroupPreemptionPolicy enabled",
+			name:              "CPG failure when different preemption policies are used across leaf groups in the CPG",
 			compositePodGroup: st.MakeCompositePodGroup().Name("cpg-root").Priority(10).PreemptionPolicy(schedulingv1beta1.PreemptNever).Obj(),
 			compositePodGroups: []*schedulingv1beta1.CompositePodGroup{
 				st.MakeCompositePodGroup().Name("cpg-root").Priority(10).PreemptionPolicy(schedulingv1beta1.PreemptNever).Obj(),
@@ -738,12 +835,11 @@ func TestValidatePodGroup(t *testing.T) {
 				st.MakePod().Name("p1").PodGroupName("pg1").Priority(10).PreemptionPolicy(v1.PreemptNever).Obj(),
 				st.MakePod().Name("p2").PodGroupName("pg2").Priority(10).PreemptionPolicy(v1.PreemptLowerPriority).Obj(),
 			},
-			enablePodGroupPreemptionPolicy: true,
-			enableCompositePodGroup:        true,
-			wantErr:                        `all pod groups in a hierarchy should have the same preemption policy as the root pod group's preemption policy, got PreemptLowerPriority ("podgroup//pg2") and Never ("compositepodgroup//cpg-root")`,
+			enableCompositePodGroup: true,
+			wantErr:                 `all pod groups in a hierarchy should have the same preemption policy, got PreemptLowerPriority ("podgroup//pg2") and Never`,
 		},
 		{
-			name:              "CPG success in multi-level hierarchy when all levels have PreemptNever with PodGroupPreemptionPolicy enabled",
+			name:              "CPG success in multi-level hierarchy when all levels have PreemptNever",
 			compositePodGroup: st.MakeCompositePodGroup().Name("cpg-root").Priority(10).PreemptionPolicy(schedulingv1beta1.PreemptNever).Obj(),
 			compositePodGroups: []*schedulingv1beta1.CompositePodGroup{
 				st.MakeCompositePodGroup().Name("cpg-root").Priority(10).PreemptionPolicy(schedulingv1beta1.PreemptNever).Obj(),
@@ -755,12 +851,11 @@ func TestValidatePodGroup(t *testing.T) {
 			pods: []*v1.Pod{
 				st.MakePod().Name("p1").PodGroupName("pg1").Priority(10).PreemptionPolicy(v1.PreemptNever).Obj(),
 			},
-			enablePodGroupPreemptionPolicy: true,
-			enableCompositePodGroup:        true,
-			wantErr:                        "",
+			enableCompositePodGroup: true,
+			wantErr:                 "",
 		},
 		{
-			name:              "CPG failure in multi-level hierarchy when nested CPG has PreemptLowerPriority mismatch with PodGroupPreemptionPolicy enabled",
+			name:              "CPG failure in multi-level hierarchy when nested CPG has PreemptLowerPriority mismatch",
 			compositePodGroup: st.MakeCompositePodGroup().Name("cpg-root").Priority(10).PreemptionPolicy(schedulingv1beta1.PreemptNever).Obj(),
 			compositePodGroups: []*schedulingv1beta1.CompositePodGroup{
 				st.MakeCompositePodGroup().Name("cpg-root").Priority(10).PreemptionPolicy(schedulingv1beta1.PreemptNever).Obj(),
@@ -772,26 +867,8 @@ func TestValidatePodGroup(t *testing.T) {
 			pods: []*v1.Pod{
 				st.MakePod().Name("p1").PodGroupName("pg1").Priority(10).PreemptionPolicy(v1.PreemptNever).Obj(),
 			},
-			enablePodGroupPreemptionPolicy: true,
-			enableCompositePodGroup:        true,
-			wantErr:                        `all pod groups in a hierarchy should have the same preemption policy as the root pod group's preemption policy, got PreemptLowerPriority ("compositepodgroup//cpg-nested") and Never ("compositepodgroup//cpg-root")`,
-		},
-		{
-			name:              "CPG success in multi-level hierarchy when nested CPG has PreemptLowerPriority mismatch with PodGroupPreemptionPolicy disabled",
-			compositePodGroup: st.MakeCompositePodGroup().Name("cpg-root").Priority(10).PreemptionPolicy(schedulingv1beta1.PreemptNever).Obj(),
-			compositePodGroups: []*schedulingv1beta1.CompositePodGroup{
-				st.MakeCompositePodGroup().Name("cpg-root").Priority(10).PreemptionPolicy(schedulingv1beta1.PreemptNever).Obj(),
-				st.MakeCompositePodGroup().Name("cpg-nested").ParentCompositePodGroup("cpg-root").Priority(10).PreemptionPolicy(schedulingv1beta1.PreemptLowerPriority).Obj(),
-			},
-			podGroups: []*schedulingv1beta1.PodGroup{
-				st.MakePodGroup().Name("pg1").ParentCompositePodGroup("cpg-nested").Priority(10).PreemptionPolicy(schedulingv1beta1.PreemptNever).Obj(),
-			},
-			pods: []*v1.Pod{
-				st.MakePod().Name("p1").PodGroupName("pg1").Priority(10).PreemptionPolicy(v1.PreemptNever).Obj(),
-			},
-			enablePodGroupPreemptionPolicy: false,
-			enableCompositePodGroup:        true,
-			wantErr:                        "",
+			enableCompositePodGroup: true,
+			wantErr:                 `all pod groups in a hierarchy should have the same preemption policy, got PreemptLowerPriority ("compositepodgroup//cpg-nested") and Never`,
 		},
 		{
 			name:              "CPG failure when leaf group has different priority than root CPG even if pods match root priority",
@@ -824,9 +901,8 @@ func TestValidatePodGroup(t *testing.T) {
 				st.MakePod().Name("p1").PodGroupName("pg1").Priority(10).PreemptionPolicy(v1.PreemptNever).Obj(),
 				st.MakePod().Name("p2").PodGroupName("pg2").Priority(10).PreemptionPolicy(v1.PreemptNever).Obj(),
 			},
-			enablePodGroupPreemptionPolicy: true,
-			enableCompositePodGroup:        true,
-			wantErr:                        `all pod groups in a hierarchy should have the same preemption policy as the root pod group's preemption policy, got PreemptLowerPriority ("podgroup//pg2") and Never ("compositepodgroup//cpg-root")`,
+			enableCompositePodGroup: true,
+			wantErr:                 `all pod groups in a hierarchy should have the same preemption policy, got PreemptLowerPriority ("podgroup//pg2") and Never`,
 		},
 		{
 			name:              "CPG failure in multi-level hierarchy when nested CPG has priority mismatch",
@@ -861,7 +937,7 @@ func TestValidatePodGroup(t *testing.T) {
 			wantErr:                 `all pod groups in a hierarchy should have the same priority as the root pod group's priority, got 20 ("podgroup//pg1") and 10 ("compositepodgroup//cpg-root")`,
 		},
 		{
-			name:              "CPG failure in multi-level hierarchy when leaf group under nested CPG has preemption policy mismatch with PodGroupPreemptionPolicy enabled",
+			name:              "CPG failure in multi-level hierarchy when leaf group under nested CPG has preemption policy mismatch",
 			compositePodGroup: st.MakeCompositePodGroup().Name("cpg-root").Priority(10).PreemptionPolicy(schedulingv1beta1.PreemptNever).Obj(),
 			compositePodGroups: []*schedulingv1beta1.CompositePodGroup{
 				st.MakeCompositePodGroup().Name("cpg-root").Priority(10).PreemptionPolicy(schedulingv1beta1.PreemptNever).Obj(),
@@ -873,9 +949,8 @@ func TestValidatePodGroup(t *testing.T) {
 			pods: []*v1.Pod{
 				st.MakePod().Name("p1").PodGroupName("pg1").Priority(10).PreemptionPolicy(v1.PreemptNever).Obj(),
 			},
-			enablePodGroupPreemptionPolicy: true,
-			enableCompositePodGroup:        true,
-			wantErr:                        `all pod groups in a hierarchy should have the same preemption policy as the root pod group's preemption policy, got PreemptLowerPriority ("podgroup//pg1") and Never ("compositepodgroup//cpg-root")`,
+			enableCompositePodGroup: true,
+			wantErr:                 `all pod groups in a hierarchy should have the same preemption policy, got PreemptLowerPriority ("podgroup//pg1") and Never`,
 		},
 		{
 			name:              "CPG success when tree depth is exactly WorkloadMaxTreeDepth (4 levels)",
@@ -1109,7 +1184,6 @@ func TestValidatePodGroup(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			featuregatetesting.SetFeatureGatesDuringTest(t, utilfeature.DefaultFeatureGate, featuregatetesting.FeatureOverrides{
 				features.GenericWorkload:                 true,
-				features.PodGroupPreemptionPolicy:        tt.enablePodGroupPreemptionPolicy,
 				features.CompositePodGroup:               tt.enableCompositePodGroup,
 				features.TopologyAwareWorkloadScheduling: tt.enableCompositePodGroup,
 			})
@@ -1135,10 +1209,9 @@ func TestValidatePodGroup(t *testing.T) {
 				}
 			}
 			sched := &Scheduler{
-				Profiles:                        profiles,
-				nodeInfoSnapshot:                snapshot,
-				genericWorkloadEnabled:          true,
-				podGroupPreemptionPolicyEnabled: tt.enablePodGroupPreemptionPolicy,
+				Profiles:               profiles,
+				nodeInfoSnapshot:       snapshot,
+				genericWorkloadEnabled: true,
 			}
 			err := sched.validatePodGroupHierarchy(podGroupInfo)
 			gotErr := ""
@@ -1888,9 +1961,10 @@ func TestSubmitPodGroupAlgorithmResult(t *testing.T) {
 			},
 			expectBound: sets.New("p1", "p2", "p3"),
 			expectCondition: &metav1.Condition{
-				Type:   schedulingapi.PodGroupInitiallyScheduled,
-				Status: metav1.ConditionTrue,
-				Reason: schedulingapi.PodGroupReasonScheduled,
+				Type:    schedulingapi.PodGroupInitiallyScheduled,
+				Status:  metav1.ConditionTrue,
+				Reason:  schedulingapi.PodGroupReasonScheduled,
+				Message: "All pods scheduled",
 			},
 		},
 		{
@@ -2164,7 +2238,7 @@ func TestSubmitPodGroupAlgorithmResult(t *testing.T) {
 	}
 }
 
-func TestUpdatePodGroupCondition(t *testing.T) {
+func TestUpdatePodGroupInitiallyScheduledCondition(t *testing.T) {
 	now := metav1.Now().Rfc3339Copy()
 
 	tests := []struct {
@@ -2419,7 +2493,7 @@ func TestUpdatePodGroupCondition(t *testing.T) {
 			expectLastTransitionTimeUnchanged: true,
 		},
 		{
-			name: "Scheduled to Scheduled preserves LastTransitionTime",
+			name: "Scheduled is not updated again",
 			existingPodGroup: &schedulingv1beta1.PodGroup{
 				ObjectMeta: metav1.ObjectMeta{Name: "pg-true-to-true", Namespace: "ns1"},
 				Status: schedulingv1beta1.PodGroupStatus{
@@ -2444,7 +2518,7 @@ func TestUpdatePodGroupCondition(t *testing.T) {
 				Type:    schedulingapi.PodGroupInitiallyScheduled,
 				Status:  metav1.ConditionTrue,
 				Reason:  schedulingapi.PodGroupReasonScheduled,
-				Message: "New condition message",
+				Message: "All pods scheduled",
 			},
 			expectLastTransitionTimeUnchanged: true,
 		},
@@ -2495,7 +2569,7 @@ func TestUpdatePodGroupCondition(t *testing.T) {
 			podGroupInfo := &framework.QueuedPodGroupInfo{
 				PodGroupInfo: &framework.PodGroupInfo{GenericPodGroup: gpg},
 			}
-			sched.updatePodGroupCondition(ctx, podGroupInfo.PodGroupInfo, tt.condition)
+			sched.updateInitiallyScheduledCondition(ctx, podGroupInfo.PodGroupInfo, tt.condition.Status, tt.condition.Reason, tt.condition.Message)
 
 			updatedPodGroup, err := client.SchedulingV1beta1().PodGroups(tt.existingPodGroup.Namespace).Get(ctx, tt.existingPodGroup.Name, metav1.GetOptions{})
 			if err != nil {
@@ -2509,6 +2583,136 @@ func TestUpdatePodGroupCondition(t *testing.T) {
 
 			if tt.expectLastTransitionTimeUnchanged && !cond.LastTransitionTime.Equal(&existingLTT) {
 				t.Errorf("Expected LastTransitionTime to be preserved as %v, got %v", existingLTT, cond.LastTransitionTime)
+			}
+		})
+	}
+}
+
+// TestUpdatePodGroupInitiallyScheduledConditionStaleCache sets the condition several times,
+// without the cache observing any of the updates in between.
+func TestUpdatePodGroupInitiallyScheduledConditionStaleCache(t *testing.T) {
+	scheduled := metav1.Condition{
+		Type:    schedulingapi.PodGroupInitiallyScheduled,
+		Status:  metav1.ConditionTrue,
+		Reason:  schedulingapi.PodGroupReasonScheduled,
+		Message: "All pods scheduled",
+	}
+	unschedulable := metav1.Condition{
+		Type:    schedulingapi.PodGroupInitiallyScheduled,
+		Status:  metav1.ConditionFalse,
+		Reason:  schedulingapi.PodGroupReasonUnschedulable,
+		Message: "extra pods could not be placed",
+	}
+	podGroup := st.MakePodGroup().Name("pg").Namespace("ns").UID("pg").Obj()
+	recreatedPodGroup := st.MakePodGroup().Name("pg").Namespace("ns").UID("recreated-pg").Obj()
+
+	tests := []struct {
+		name string
+		// deleted removes the PodGroup from the API server, but not from the cache.
+		deleted bool
+		// recreated replaces the PodGroup in the API server and in the cache before the last update.
+		recreated bool
+		// staleCycle makes the last update come from a cycle that started before the PodGroup was recreated.
+		staleCycle bool
+		// failedStatusPatch, if set, is the number of the status patch that fails.
+		failedStatusPatch int
+		updates           []metav1.Condition
+		expectCondition   *metav1.Condition
+		expectAssumed     bool
+	}{
+		{
+			name:            "True is not regressed",
+			updates:         []metav1.Condition{scheduled, unschedulable},
+			expectCondition: &scheduled,
+			expectAssumed:   true,
+		},
+		{
+			name:              "True that failed to be set is not assumed",
+			failedStatusPatch: 1,
+			updates:           []metav1.Condition{scheduled, unschedulable},
+			expectCondition:   &unschedulable,
+		},
+		{
+			name:            "True set for a deleted PodGroup does not block False for a recreated one",
+			recreated:       true,
+			updates:         []metav1.Condition{scheduled, unschedulable},
+			expectCondition: &unschedulable,
+		},
+		{
+			name:       "False from a cycle for a deleted PodGroup is not set on a recreated one",
+			recreated:  true,
+			staleCycle: true,
+			updates:    []metav1.Condition{unschedulable},
+		},
+		{
+			name:    "True for a deleted PodGroup is not assumed",
+			deleted: true,
+			updates: []metav1.Condition{scheduled},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logger, ctx := ktesting.NewTestContext(t)
+
+			var objects []runtime.Object
+			if !tt.deleted {
+				objects = append(objects, podGroup)
+			}
+			client := clientsetfake.NewClientset(objects...)
+			statusPatches := 0
+			client.PrependReactor("patch", "podgroups", func(action clienttesting.Action) (bool, runtime.Object, error) {
+				if action.GetSubresource() != "status" {
+					return false, nil, nil
+				}
+				statusPatches++
+				if statusPatches != tt.failedStatusPatch {
+					return false, nil, nil
+				}
+				return true, nil, fmt.Errorf("injected error")
+			})
+			// The cache is not updated with the scheduler's own writes,
+			// as if their watch events were not delivered yet.
+			cache := internalcache.New(ctx, nil, true, true)
+			// A member pod keeps the pod group state in the cache when the PodGroup is deleted.
+			cache.AddPodGroupMember(st.MakePod().Name("p").Namespace("ns").UID("p").PodGroupName("pg").Obj())
+			cache.AddGenericPodGroup(fwk.NewGenericPodGroup(podGroup))
+			sched := &Scheduler{client: client, Cache: cache}
+
+			current := podGroup
+			for i, condition := range tt.updates {
+				if tt.recreated && i == len(tt.updates)-1 {
+					if err := client.SchedulingV1beta1().PodGroups(podGroup.Namespace).Delete(ctx, podGroup.Name, metav1.DeleteOptions{}); err != nil {
+						t.Fatalf("Failed to delete PodGroup: %v", err)
+					}
+					if _, err := client.SchedulingV1beta1().PodGroups(podGroup.Namespace).Create(ctx, recreatedPodGroup, metav1.CreateOptions{}); err != nil {
+						t.Fatalf("Failed to create PodGroup: %v", err)
+					}
+					cache.RemoveGenericPodGroup(logger, fwk.NewGenericPodGroup(podGroup))
+					cache.AddGenericPodGroup(fwk.NewGenericPodGroup(recreatedPodGroup))
+					if !tt.staleCycle {
+						current = recreatedPodGroup
+					}
+				}
+				sched.updateInitiallyScheduledCondition(ctx, newPGInfo(current), condition.Status, condition.Reason, condition.Message)
+			}
+
+			updatedPodGroup, err := client.SchedulingV1beta1().PodGroups(podGroup.Namespace).Get(ctx, podGroup.Name, metav1.GetOptions{})
+			if tt.deleted {
+				if !apierrors.IsNotFound(err) {
+					t.Fatalf("Expected PodGroup not to be found, got error: %v", err)
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("Failed to get PodGroup: %v", err)
+				}
+				cond := apimeta.FindStatusCondition(updatedPodGroup.Status.Conditions, schedulingapi.PodGroupInitiallyScheduled)
+				if diff := cmp.Diff(tt.expectCondition, cond, cmpopts.IgnoreFields(metav1.Condition{}, "LastTransitionTime")); diff != "" {
+					t.Errorf("Unexpected PodGroupInitiallyScheduled condition (-want +got):\n%s", diff)
+				}
+			}
+			if _, assumed := cache.IsGroupInitiallyScheduled(logger, fwk.PodGroupKey(current.Namespace, current.Name)); assumed != tt.expectAssumed {
+				t.Errorf("Expected IsGroupInitiallyScheduled to return %v, got %v", tt.expectAssumed, assumed)
 			}
 		})
 	}
@@ -2836,7 +3040,7 @@ func TestScheduleOnePodGroup_SchedulerNameMismatchUpdatesStatus(t *testing.T) {
 	p2 := st.MakePod().Namespace("default").Name("p2").UID("p2").PodGroupName("pg").SchedulerName("sched2").Obj()
 	qInfo1 := &framework.QueuedPodInfo{PodInfo: &framework.PodInfo{Pod: p1}}
 	qInfo2 := &framework.QueuedPodInfo{PodInfo: &framework.PodInfo{Pod: p2}}
-	testPodGroup := st.MakePodGroup().Name("pg").Namespace("default").Obj()
+	testPodGroup := st.MakePodGroup().Name("pg").Namespace("default").UID("pg").Obj()
 	gpg := fwk.NewGenericPodGroup(testPodGroup)
 	podGroupInfo := newQueuedPodGroupInfo(&framework.PodGroupInfo{GenericPodGroup: gpg}, qInfo1, qInfo2)
 	_, ctx := ktesting.NewTestContext(t)
@@ -5043,7 +5247,7 @@ func TestPodGroupCycle_PodStatusConditions(t *testing.T) {
 		}
 	}
 }
-func TestUpdateCompositePodGroupCondition(t *testing.T) {
+func TestUpdateCompositePodGroupInitiallyScheduledCondition(t *testing.T) {
 	now := metav1.Now().Rfc3339Copy()
 
 	tests := []struct {
@@ -5266,7 +5470,7 @@ func TestUpdateCompositePodGroupCondition(t *testing.T) {
 			expectLastTransitionTimeUnchanged: true,
 		},
 		{
-			name: "Scheduled to Scheduled preserves LastTransitionTime",
+			name: "Scheduled is not updated again",
 			existingPodGroup: st.MakeCompositePodGroup().Name("cpg-true-to-true").Namespace("ns1").Conditions(
 				metav1.Condition{
 					Type:               schedulingapi.CompositePodGroupInitiallyScheduled,
@@ -5286,7 +5490,7 @@ func TestUpdateCompositePodGroupCondition(t *testing.T) {
 				Type:    schedulingapi.CompositePodGroupInitiallyScheduled,
 				Status:  metav1.ConditionTrue,
 				Reason:  schedulingapi.CompositePodGroupReasonScheduled,
-				Message: "New condition message",
+				Message: "All pods scheduled",
 			},
 			expectLastTransitionTimeUnchanged: true,
 		},
@@ -5337,7 +5541,7 @@ func TestUpdateCompositePodGroupCondition(t *testing.T) {
 					GenericPodGroup: fwk.NewGenericCompositePodGroup(tt.existingPodGroup),
 				},
 			}
-			sched.updateCompositePodGroupCondition(ctx, podGroupInfo.PodGroupInfo, tt.condition)
+			sched.updateInitiallyScheduledCondition(ctx, podGroupInfo.PodGroupInfo, tt.condition.Status, tt.condition.Reason, tt.condition.Message)
 
 			updatedPodGroup, err := client.SchedulingV1beta1().CompositePodGroups(tt.existingPodGroup.Namespace).Get(ctx, tt.existingPodGroup.Name, metav1.GetOptions{})
 			if err != nil {
@@ -5351,6 +5555,136 @@ func TestUpdateCompositePodGroupCondition(t *testing.T) {
 
 			if tt.expectLastTransitionTimeUnchanged && !cond.LastTransitionTime.Equal(&existingLTT) {
 				t.Errorf("Expected LastTransitionTime to be preserved as %v, got %v", existingLTT, cond.LastTransitionTime)
+			}
+		})
+	}
+}
+
+// TestUpdateCompositePodGroupInitiallyScheduledConditionStaleCache sets the condition several times,
+// without the cache observing any of the updates in between.
+func TestUpdateCompositePodGroupInitiallyScheduledConditionStaleCache(t *testing.T) {
+	scheduled := metav1.Condition{
+		Type:    schedulingapi.CompositePodGroupInitiallyScheduled,
+		Status:  metav1.ConditionTrue,
+		Reason:  schedulingapi.CompositePodGroupReasonScheduled,
+		Message: "All child groups scheduled",
+	}
+	unschedulable := metav1.Condition{
+		Type:    schedulingapi.CompositePodGroupInitiallyScheduled,
+		Status:  metav1.ConditionFalse,
+		Reason:  schedulingapi.CompositePodGroupReasonUnschedulable,
+		Message: "no pods were schedulable",
+	}
+	compositePodGroup := st.MakeCompositePodGroup().Name("cpg").Namespace("ns").UID("cpg").Obj()
+	recreatedCompositePodGroup := st.MakeCompositePodGroup().Name("cpg").Namespace("ns").UID("recreated-cpg").Obj()
+
+	tests := []struct {
+		name string
+		// deleted removes the CompositePodGroup from the API server, but not from the cache.
+		deleted bool
+		// recreated replaces the CompositePodGroup in the API server and in the cache before the last update.
+		recreated bool
+		// staleCycle makes the last update come from a cycle that started before the CompositePodGroup was recreated.
+		staleCycle bool
+		// failedStatusPatch, if set, is the number of the status patch that fails.
+		failedStatusPatch int
+		updates           []metav1.Condition
+		expectCondition   *metav1.Condition
+		expectAssumed     bool
+	}{
+		{
+			name:            "True is not regressed",
+			updates:         []metav1.Condition{scheduled, unschedulable},
+			expectCondition: &scheduled,
+			expectAssumed:   true,
+		},
+		{
+			name:              "True that failed to be set is not assumed",
+			failedStatusPatch: 1,
+			updates:           []metav1.Condition{scheduled, unschedulable},
+			expectCondition:   &unschedulable,
+		},
+		{
+			name:            "True set for a deleted CompositePodGroup does not block False for a recreated one",
+			recreated:       true,
+			updates:         []metav1.Condition{scheduled, unschedulable},
+			expectCondition: &unschedulable,
+		},
+		{
+			name:       "False from a cycle for a deleted CompositePodGroup is not set on a recreated one",
+			recreated:  true,
+			staleCycle: true,
+			updates:    []metav1.Condition{unschedulable},
+		},
+		{
+			name:    "True for a deleted CompositePodGroup is not assumed",
+			deleted: true,
+			updates: []metav1.Condition{scheduled},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logger, ctx := ktesting.NewTestContext(t)
+
+			var objects []runtime.Object
+			if !tt.deleted {
+				objects = append(objects, compositePodGroup)
+			}
+			client := clientsetfake.NewClientset(objects...)
+			statusPatches := 0
+			client.PrependReactor("patch", "compositepodgroups", func(action clienttesting.Action) (bool, runtime.Object, error) {
+				if action.GetSubresource() != "status" {
+					return false, nil, nil
+				}
+				statusPatches++
+				if statusPatches != tt.failedStatusPatch {
+					return false, nil, nil
+				}
+				return true, nil, fmt.Errorf("injected error")
+			})
+			// The cache is not updated with the scheduler's own writes,
+			// as if their watch events were not delivered yet.
+			cache := internalcache.New(ctx, nil, true, true)
+			// A child group keeps the composite pod group state in the cache when the CompositePodGroup is deleted.
+			cache.AddGenericPodGroup(fwk.NewGenericPodGroup(st.MakePodGroup().Name("pg").Namespace("ns").UID("pg").ParentCompositePodGroup("cpg").Obj()))
+			cache.AddGenericPodGroup(fwk.NewGenericCompositePodGroup(compositePodGroup))
+			sched := &Scheduler{client: client, Cache: cache}
+
+			current := compositePodGroup
+			for i, condition := range tt.updates {
+				if tt.recreated && i == len(tt.updates)-1 {
+					if err := client.SchedulingV1beta1().CompositePodGroups(compositePodGroup.Namespace).Delete(ctx, compositePodGroup.Name, metav1.DeleteOptions{}); err != nil {
+						t.Fatalf("Failed to delete CompositePodGroup: %v", err)
+					}
+					if _, err := client.SchedulingV1beta1().CompositePodGroups(compositePodGroup.Namespace).Create(ctx, recreatedCompositePodGroup, metav1.CreateOptions{}); err != nil {
+						t.Fatalf("Failed to create CompositePodGroup: %v", err)
+					}
+					cache.RemoveGenericPodGroup(logger, fwk.NewGenericCompositePodGroup(compositePodGroup))
+					cache.AddGenericPodGroup(fwk.NewGenericCompositePodGroup(recreatedCompositePodGroup))
+					if !tt.staleCycle {
+						current = recreatedCompositePodGroup
+					}
+				}
+				sched.updateInitiallyScheduledCondition(ctx, newCPGInfo(current), condition.Status, condition.Reason, condition.Message)
+			}
+
+			updatedCompositePodGroup, err := client.SchedulingV1beta1().CompositePodGroups(compositePodGroup.Namespace).Get(ctx, compositePodGroup.Name, metav1.GetOptions{})
+			if tt.deleted {
+				if !apierrors.IsNotFound(err) {
+					t.Fatalf("Expected CompositePodGroup not to be found, got error: %v", err)
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("Failed to get CompositePodGroup: %v", err)
+				}
+				cond := apimeta.FindStatusCondition(updatedCompositePodGroup.Status.Conditions, schedulingapi.CompositePodGroupInitiallyScheduled)
+				if diff := cmp.Diff(tt.expectCondition, cond, cmpopts.IgnoreFields(metav1.Condition{}, "LastTransitionTime")); diff != "" {
+					t.Errorf("Unexpected CompositePodGroupInitiallyScheduled condition (-want +got):\n%s", diff)
+				}
+			}
+			if _, assumed := cache.IsGroupInitiallyScheduled(logger, fwk.CompositePodGroupKey(current.Namespace, current.Name)); assumed != tt.expectAssumed {
+				t.Errorf("Expected IsGroupInitiallyScheduled to return %v, got %v", tt.expectAssumed, assumed)
 			}
 		})
 	}
