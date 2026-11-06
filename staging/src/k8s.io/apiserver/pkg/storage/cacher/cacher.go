@@ -123,6 +123,10 @@ type Config struct {
 	Codec runtime.Codec
 
 	Clock clock.WithTicker
+
+	// CompactorPollPeriod specifies how frequently compactor polls storage for compaction revision.
+	// Defaults to 15s when zero.
+	CompactorPollPeriod time.Duration
 }
 
 type watchersMap map[int]*cacheWatcher
@@ -299,6 +303,8 @@ type Cacher struct {
 	// Versioner is used to handle resource versions.
 	versioner storage.Versioner
 
+	codec runtime.Codec
+
 	// newFunc is a function that creates new empty object storing a object of type Type.
 	newFunc func() runtime.Object
 
@@ -398,6 +404,7 @@ func NewCacherFromConfig(config Config) (*Cacher, error) {
 		objectType:     objType,
 		groupResource:  config.GroupResource,
 		versioner:      config.Versioner,
+		codec:          config.Codec,
 		newFunc:        config.NewFunc,
 		newListFunc:    config.NewListFunc,
 		indexedTrigger: indexedTrigger,
@@ -467,7 +474,7 @@ func NewCacherFromConfig(config Config) (*Cacher, error) {
 	}
 
 	if utilfeature.DefaultFeatureGate.Enabled(features.ListFromCacheSnapshot) {
-		cacher.compactor = newCompactor(config.Storage, watchCache, config.Clock)
+		cacher.compactor = newCompactor(config.Storage, watchCache, config.Clock, config.CompactorPollPeriod)
 		go cacher.compactor.Run(stopCh)
 	}
 

@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"net/http"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -416,7 +417,9 @@ func RunTestDelayedWatchDelivery(ctx context.Context, t *testing.T, store storag
 	// closed (as otherwise events would have to be dropped).
 	// For now, this number is smallest for Cacher and it equals 21 for it.
 	totalPods := 21
-	for i := 0; i < totalPods; i++ {
+	createdPods := make([]*example.Pod, totalPods)
+	expectedEvents := make([]watch.Event, totalPods)
+	for i := range totalPods {
 		out := &example.Pod{}
 		pod := &example.Pod{
 			ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("foo-%d", i), Namespace: "test-ns"},
@@ -428,36 +431,20 @@ func RunTestDelayedWatchDelivery(ctx context.Context, t *testing.T, store storag
 		if err != nil {
 			t.Errorf("GuaranteedUpdate failed: %v", err)
 		}
+		createdPods[i] = out
+		expectedEvents[i] = watch.Event{Type: watch.Added, Object: out}
 	}
 
-	watched := 0
-	for {
-		event, ok := <-watcher.ResultChan()
-		if !ok {
-			break
-		}
-		object := event.Object
-		if co, ok := object.(runtime.CacheableObject); ok {
-			object = co.GetObject()
-		}
-		if a, e := object.(*example.Pod).Name, fmt.Sprintf("foo-%d", watched); e != a {
-			t.Errorf("Unexpected object watched: %s, expected %s", a, e)
-		}
-		watched++
-		// Before stopping watcher wait for an event to arrive and give them some time to fill the queue.
-		if watched == 1 {
-			time.Sleep(time.Second)
-			// Stop the watcher to check if the consecutive events will be delivered.
-			watcher.Stop()
-		}
-	}
+	// Before stopping watcher wait for an event to arrive and give them some time to fill the queue.
+	testCheckResult(t, watcher, &expectedEvents[0])
+	time.Sleep(time.Second)
+	// Stop the watcher to check if the consecutive events will be delivered.
+	watcher.Stop()
+
 	// We expect at least N events to be delivered, depending on the implementation.
 	// For now, this number is smallest for Cacher and it equals 10 (size of the out buffer).
 	outBufferSize := 10
-	expectWatched := outBufferSize + 1 // initial event
-	if watched < expectWatched {
-		t.Errorf("Unexpected number of events: %v, expected at least: %v", watched, expectWatched)
-	}
+	ExpectWatchEventsPrefixAndClose(expectedEvents[1:], createdPods[outBufferSize], createdPods[totalPods-1]).Check(t, watcher)
 }
 
 func RunTestWatchError(ctx context.Context, t *testing.T, store InterfaceWithPrefixTransformer) {
@@ -2244,7 +2231,7 @@ func RunWatchSemantics(ctx context.Context, t *testing.T, store storage.Interfac
 			defer w.Stop()
 
 			// make sure we only get initial events
-			TestCheckResultsInStrictOrder(t, w, scenario.expectedInitialEvents(createdPods))
+			ExpectWatchEventsExact(scenario.expectedInitialEvents(createdPods)).Check(t, w)
 
 			// make sure that the actual bookmark has at least RV >= to the expected one
 			if scenario.expectedInitialEventsBookmarkWithMinimalRV != nil {
@@ -2334,7 +2321,7 @@ func RunWatchSemanticInitialEventsExtended(ctx context.Context, t *testing.T, st
 
 	// make sure we only get initial events from the first ns
 	// followed by the bookmark with the global RV
-	TestCheckResultsInStrictOrder(t, w, expectedInitialEventsInStrictOrder(initialPods, otherNsPod.ResourceVersion))
+	ExpectWatchEventsExact(expectedInitialEventsInStrictOrder(initialPods, otherNsPod.ResourceVersion)).Check(t, w)
 	TestCheckNoMoreResultsWithIgnoreFunc(t, w, nil)
 }
 
@@ -2389,7 +2376,7 @@ func RunWatchListMatchSingle(ctx context.Context, t *testing.T, store storage.In
 
 	// make sure we only get a single pod matching the field selector
 	// followed by the bookmark with the global RV
-	TestCheckResultsInStrictOrder(t, w, expectedInitialEventsInStrictOrder(expectedPod, lastAddedPod.ResourceVersion))
+	ExpectWatchEventsExact(expectedInitialEventsInStrictOrder(expectedPod, lastAddedPod.ResourceVersion)).Check(t, w)
 	TestCheckNoMoreResultsWithIgnoreFunc(t, w, nil)
 }
 
@@ -2461,6 +2448,19 @@ func RunWatchErrorIsBlockingFurtherEvents(ctx context.Context, t *testing.T, sto
 }
 
 func RunTestWatchResync(ctx context.Context, t *testing.T, store storage.Interface, isCacher bool, compact Compaction, resync, triggerBookmarks func()) {
+	for i := range 3 {
+		t.Run(fmt.Sprintf("compact=%d", i), func(t *testing.T) {
+			testWatchResync(ctx, t, store, isCacher, compact, resync, triggerBookmarks, i, false)
+		})
+	}
+	for i := range 2 {
+		t.Run(fmt.Sprintf("stall,compact=%d", i), func(t *testing.T) {
+			testWatchResync(ctx, t, store, isCacher, compact, resync, triggerBookmarks, i, true)
+		})
+	}
+}
+
+func testWatchResync(ctx context.Context, t *testing.T, store storage.Interface, isCacher bool, compact Compaction, resync, triggerBookmarks func(), compactIdx int, stall bool) {
 	type testRV string
 	const (
 		rvUnset        testRV = ""
@@ -2470,7 +2470,11 @@ func RunTestWatchResync(ctx context.Context, t *testing.T, store storage.Interfa
 		rvBeforeWatch  testRV = "beforeWatch"
 		rvBeforeResync testRV = "beforeResync"
 		rvAfterResync  testRV = "afterResync"
+		stallCount            = 25
 	)
+
+	ns := fmt.Sprintf("ns-%d-%t", compactIdx, stall)
+	otherNs := fmt.Sprintf("other-%d-%t", compactIdx, stall)
 
 	pod1, pod2, pod3 := makePod("1"), makePod("2"), makePod("3")
 	pod1.Labels = map[string]string{"foo": "bar"}
@@ -2481,6 +2485,21 @@ func RunTestWatchResync(ctx context.Context, t *testing.T, store storage.Interfa
 	added := func(pod *example.Pod) watch.Event {
 		return watch.Event{Type: watch.Added, Object: pod}
 	}
+
+	stallPods := make([]*example.Pod, stallCount)
+	stallEvents := make([]watch.Event, stallCount)
+	for i := range stallPods {
+		pod := makePod(fmt.Sprintf("stall-%02d", i))
+		pod.Labels = map[string]string{"foo": "bar"}
+		pod.Spec.NodeName = "node-1"
+		stallPods[i] = pod
+		stallEvents[i] = added(pod)
+	}
+	stallMin, stallMax := stallPods[0], stallPods[len(stallPods)-2]
+	stallCompacted := stallPods[len(stallPods)-1]
+	otherNsPod := makePod("other-ns")
+	otherNsPod.Spec.NodeName = "node-2"
+
 	initialBookmarkWithPod1RV := watch.Event{Type: watch.Bookmark, Object: &example.Pod{ObjectMeta: metav1.ObjectMeta{ResourceVersion: pod1.ResourceVersion, Annotations: map[string]string{metav1.InitialEventsAnnotationKey: "true"}}}}
 	initialBookmarkWithPod2RV := watch.Event{Type: watch.Bookmark, Object: &example.Pod{ObjectMeta: metav1.ObjectMeta{ResourceVersion: pod2.ResourceVersion, Annotations: map[string]string{metav1.InitialEventsAnnotationKey: "true"}}}}
 	initialBookmarkWithPod3RV := watch.Event{Type: watch.Bookmark, Object: &example.Pod{ObjectMeta: metav1.ObjectMeta{ResourceVersion: pod3.ResourceVersion, Annotations: map[string]string{metav1.InitialEventsAnnotationKey: "true"}}}}
@@ -2497,10 +2516,12 @@ func RunTestWatchResync(ctx context.Context, t *testing.T, store storage.Interfa
 		podsBeforeWatch     []*example.Pod
 		podsBeforeResync    []*example.Pod
 		compactBeforeResync *example.Pod
+		stall               bool
+		compactAfterResync  *example.Pod
 		podsAfterResync     []*example.Pod
-		expect              []watch.Event
-		expectEtcd          []watch.Event
-		expectCacher        []watch.Event
+		expect              *WatchExpectation
+		expectEtcd          *WatchExpectation
+		expectCacher        *WatchExpectation
 	}{
 		{
 			name:                "allowWatchBookmarks=true, sendInitialEvents=true, RV=unset",
@@ -2509,8 +2530,8 @@ func RunTestWatchResync(ctx context.Context, t *testing.T, store storage.Interfa
 			podsBeforeWatch:     []*example.Pod{pod1},
 			podsBeforeResync:    []*example.Pod{pod2},
 			podsAfterResync:     []*example.Pod{pod3},
-			expectEtcd:          []watch.Event{added(pod1), initialBookmarkWithPod1RV, added(pod2), added(pod3)},
-			expectCacher:        []watch.Event{added(pod1), initialBookmarkWithPod1RV, added(pod2), added(pod3), bookmarkWithPod3RV},
+			expectEtcd:          ExpectWatchEventsExact([]watch.Event{added(pod1), initialBookmarkWithPod1RV, added(pod2), added(pod3)}),
+			expectCacher:        ExpectWatchEventsExact([]watch.Event{added(pod1), initialBookmarkWithPod1RV, added(pod2), added(pod3), bookmarkWithPod3RV}),
 		},
 		{
 			name:                "allowWatchBookmarks=true, sendInitialEvents=false, RV=unset",
@@ -2519,8 +2540,8 @@ func RunTestWatchResync(ctx context.Context, t *testing.T, store storage.Interfa
 			podsBeforeWatch:     []*example.Pod{pod1},
 			podsBeforeResync:    []*example.Pod{pod2},
 			podsAfterResync:     []*example.Pod{pod3},
-			expectEtcd:          []watch.Event{added(pod2), added(pod3)},
-			expectCacher:        []watch.Event{added(pod2), added(pod3), bookmarkWithPod3RV},
+			expectEtcd:          ExpectWatchEventsExact([]watch.Event{added(pod2), added(pod3)}),
+			expectCacher:        ExpectWatchEventsExact([]watch.Event{added(pod2), added(pod3), bookmarkWithPod3RV}),
 		},
 		{
 			name:              "allowWatchBookmarks=false, sendInitialEvents=false, RV=unset",
@@ -2528,7 +2549,7 @@ func RunTestWatchResync(ctx context.Context, t *testing.T, store storage.Interfa
 			podsBeforeWatch:   []*example.Pod{pod1},
 			podsBeforeResync:  []*example.Pod{pod2},
 			podsAfterResync:   []*example.Pod{pod3},
-			expect:            []watch.Event{added(pod2), added(pod3)},
+			expect:            ExpectWatchEventsExact([]watch.Event{added(pod2), added(pod3)}),
 		},
 		{
 			name:              "allowWatchBookmarks=false, sendInitialEvents=true, RV=unset",
@@ -2536,14 +2557,14 @@ func RunTestWatchResync(ctx context.Context, t *testing.T, store storage.Interfa
 			podsBeforeWatch:   []*example.Pod{pod1},
 			podsBeforeResync:  []*example.Pod{pod2},
 			podsAfterResync:   []*example.Pod{pod3},
-			expect:            []watch.Event{added(pod1), added(pod2), added(pod3)},
+			expect:            ExpectWatchEventsExact([]watch.Event{added(pod1), added(pod2), added(pod3)}),
 		},
 		{
 			name:             "legacy, RV=unset",
 			podsBeforeWatch:  []*example.Pod{pod1},
 			podsBeforeResync: []*example.Pod{pod2},
 			podsAfterResync:  []*example.Pod{pod3},
-			expect:           []watch.Event{added(pod1), added(pod2), added(pod3)},
+			expect:           ExpectWatchEventsExact([]watch.Event{added(pod1), added(pod2), added(pod3)}),
 		},
 		{
 			name:                "allowWatchBookmarks=true, sendInitialEvents=true, RV=0",
@@ -2553,8 +2574,8 @@ func RunTestWatchResync(ctx context.Context, t *testing.T, store storage.Interfa
 			podsBeforeWatch:     []*example.Pod{pod1},
 			podsBeforeResync:    []*example.Pod{pod2},
 			podsAfterResync:     []*example.Pod{pod3},
-			expectEtcd:          []watch.Event{added(pod1), initialBookmarkWithPod1RV, added(pod2), added(pod3)},
-			expectCacher:        []watch.Event{added(pod1), initialBookmarkWithPod1RV, added(pod2), added(pod3), bookmarkWithPod3RV},
+			expectEtcd:          ExpectWatchEventsExact([]watch.Event{added(pod1), initialBookmarkWithPod1RV, added(pod2), added(pod3)}),
+			expectCacher:        ExpectWatchEventsExact([]watch.Event{added(pod1), initialBookmarkWithPod1RV, added(pod2), added(pod3), bookmarkWithPod3RV}),
 		},
 		{
 			name:                "allowWatchBookmarks=true, sendInitialEvents=false, RV=0",
@@ -2564,8 +2585,8 @@ func RunTestWatchResync(ctx context.Context, t *testing.T, store storage.Interfa
 			podsBeforeWatch:     []*example.Pod{pod1},
 			podsBeforeResync:    []*example.Pod{pod2},
 			podsAfterResync:     []*example.Pod{pod3},
-			expectEtcd:          []watch.Event{added(pod2), added(pod3)},
-			expectCacher:        []watch.Event{added(pod2), added(pod3), bookmarkWithPod3RV},
+			expectEtcd:          ExpectWatchEventsExact([]watch.Event{added(pod2), added(pod3)}),
+			expectCacher:        ExpectWatchEventsExact([]watch.Event{added(pod2), added(pod3), bookmarkWithPod3RV}),
 		},
 		{
 			name:              "allowWatchBookmarks=false, sendInitialEvents=false, RV=0",
@@ -2574,7 +2595,7 @@ func RunTestWatchResync(ctx context.Context, t *testing.T, store storage.Interfa
 			podsBeforeWatch:   []*example.Pod{pod1},
 			podsBeforeResync:  []*example.Pod{pod2},
 			podsAfterResync:   []*example.Pod{pod3},
-			expect:            []watch.Event{added(pod2), added(pod3)},
+			expect:            ExpectWatchEventsExact([]watch.Event{added(pod2), added(pod3)}),
 		},
 		{
 			name:              "allowWatchBookmarks=false, sendInitialEvents=true, RV=0",
@@ -2583,7 +2604,7 @@ func RunTestWatchResync(ctx context.Context, t *testing.T, store storage.Interfa
 			podsBeforeWatch:   []*example.Pod{pod1},
 			podsBeforeResync:  []*example.Pod{pod2},
 			podsAfterResync:   []*example.Pod{pod3},
-			expect:            []watch.Event{added(pod1), added(pod2), added(pod3)},
+			expect:            ExpectWatchEventsExact([]watch.Event{added(pod1), added(pod2), added(pod3)}),
 		},
 		{
 			name:             "legacy, RV=0",
@@ -2591,7 +2612,7 @@ func RunTestWatchResync(ctx context.Context, t *testing.T, store storage.Interfa
 			podsBeforeWatch:  []*example.Pod{pod1},
 			podsBeforeResync: []*example.Pod{pod2},
 			podsAfterResync:  []*example.Pod{pod3},
-			expect:           []watch.Event{added(pod1), added(pod2), added(pod3)},
+			expect:           ExpectWatchEventsExact([]watch.Event{added(pod1), added(pod2), added(pod3)}),
 		},
 		{
 			name:                "allowWatchBookmarks=true, sendInitialEvents=true, RV=1",
@@ -2601,8 +2622,8 @@ func RunTestWatchResync(ctx context.Context, t *testing.T, store storage.Interfa
 			podsBeforeWatch:     []*example.Pod{pod1},
 			podsBeforeResync:    []*example.Pod{pod2},
 			podsAfterResync:     []*example.Pod{pod3},
-			expectEtcd:          []watch.Event{added(pod1), initialBookmarkWithPod1RV, added(pod2), added(pod3)},
-			expectCacher:        []watch.Event{added(pod1), initialBookmarkWithPod1RV, added(pod2), added(pod3), bookmarkWithPod3RV},
+			expectEtcd:          ExpectWatchEventsExact([]watch.Event{added(pod1), initialBookmarkWithPod1RV, added(pod2), added(pod3)}),
+			expectCacher:        ExpectWatchEventsExact([]watch.Event{added(pod1), initialBookmarkWithPod1RV, added(pod2), added(pod3), bookmarkWithPod3RV}),
 		},
 		{
 			name:                "allowWatchBookmarks=true, sendInitialEvents=false, RV=1",
@@ -2612,8 +2633,8 @@ func RunTestWatchResync(ctx context.Context, t *testing.T, store storage.Interfa
 			podsBeforeWatch:     []*example.Pod{pod1},
 			podsBeforeResync:    []*example.Pod{pod2},
 			podsAfterResync:     []*example.Pod{pod3},
-			expectEtcd:          []watch.Event{expiredEtcdError},
-			expectCacher:        []watch.Event{expiredCacherError},
+			expectEtcd:          ExpectWatchEventsExact([]watch.Event{expiredEtcdError}),
+			expectCacher:        ExpectWatchEventsExact([]watch.Event{expiredCacherError}),
 		},
 		{
 			name:              "allowWatchBookmarks=false, sendInitialEvents=false, RV=1",
@@ -2622,8 +2643,8 @@ func RunTestWatchResync(ctx context.Context, t *testing.T, store storage.Interfa
 			podsBeforeWatch:   []*example.Pod{pod1},
 			podsBeforeResync:  []*example.Pod{pod2},
 			podsAfterResync:   []*example.Pod{pod3},
-			expectEtcd:        []watch.Event{expiredEtcdError},
-			expectCacher:      []watch.Event{expiredCacherError},
+			expectEtcd:        ExpectWatchEventsExact([]watch.Event{expiredEtcdError}),
+			expectCacher:      ExpectWatchEventsExact([]watch.Event{expiredCacherError}),
 		},
 		{
 			name:              "allowWatchBookmarks=false, sendInitialEvents=true, RV=1",
@@ -2632,7 +2653,7 @@ func RunTestWatchResync(ctx context.Context, t *testing.T, store storage.Interfa
 			podsBeforeWatch:   []*example.Pod{pod1},
 			podsBeforeResync:  []*example.Pod{pod2},
 			podsAfterResync:   []*example.Pod{pod3},
-			expect:            []watch.Event{added(pod1), added(pod2), added(pod3)},
+			expect:            ExpectWatchEventsExact([]watch.Event{added(pod1), added(pod2), added(pod3)}),
 		},
 		{
 			name:             "legacy, RV=1",
@@ -2640,8 +2661,8 @@ func RunTestWatchResync(ctx context.Context, t *testing.T, store storage.Interfa
 			podsBeforeWatch:  []*example.Pod{pod1},
 			podsBeforeResync: []*example.Pod{pod2},
 			podsAfterResync:  []*example.Pod{pod3},
-			expectEtcd:       []watch.Event{expiredEtcdError},
-			expectCacher:     []watch.Event{expiredCacherError},
+			expectEtcd:       ExpectWatchEventsExact([]watch.Event{expiredEtcdError}),
+			expectCacher:     ExpectWatchEventsExact([]watch.Event{expiredCacherError}),
 		},
 		{
 			name:                "allowWatchBookmarks=true, sendInitialEvents=true, RV=beforeTest",
@@ -2651,8 +2672,8 @@ func RunTestWatchResync(ctx context.Context, t *testing.T, store storage.Interfa
 			podsBeforeWatch:     []*example.Pod{pod1},
 			podsBeforeResync:    []*example.Pod{pod2},
 			podsAfterResync:     []*example.Pod{pod3},
-			expectEtcd:          []watch.Event{added(pod1), initialBookmarkWithPod1RV, added(pod2), added(pod3)},
-			expectCacher:        []watch.Event{added(pod1), initialBookmarkWithPod1RV, added(pod2), added(pod3), bookmarkWithPod3RV},
+			expectEtcd:          ExpectWatchEventsExact([]watch.Event{added(pod1), initialBookmarkWithPod1RV, added(pod2), added(pod3)}),
+			expectCacher:        ExpectWatchEventsExact([]watch.Event{added(pod1), initialBookmarkWithPod1RV, added(pod2), added(pod3), bookmarkWithPod3RV}),
 		},
 		{
 			name:                "allowWatchBookmarks=true, sendInitialEvents=false, RV=beforeTest",
@@ -2662,8 +2683,8 @@ func RunTestWatchResync(ctx context.Context, t *testing.T, store storage.Interfa
 			podsBeforeWatch:     []*example.Pod{pod1},
 			podsBeforeResync:    []*example.Pod{pod2},
 			podsAfterResync:     []*example.Pod{pod3},
-			expectEtcd:          []watch.Event{added(pod1), added(pod2), added(pod3)},
-			expectCacher:        []watch.Event{added(pod1), added(pod2), added(pod3), bookmarkWithPod3RV},
+			expectEtcd:          ExpectWatchEventsExact([]watch.Event{added(pod1), added(pod2), added(pod3)}),
+			expectCacher:        ExpectWatchEventsExact([]watch.Event{added(pod1), added(pod2), added(pod3), bookmarkWithPod3RV}),
 		},
 		{
 			name:              "allowWatchBookmarks=false, sendInitialEvents=false, RV=beforeTest",
@@ -2672,7 +2693,7 @@ func RunTestWatchResync(ctx context.Context, t *testing.T, store storage.Interfa
 			podsBeforeWatch:   []*example.Pod{pod1},
 			podsBeforeResync:  []*example.Pod{pod2},
 			podsAfterResync:   []*example.Pod{pod3},
-			expect:            []watch.Event{added(pod1), added(pod2), added(pod3)},
+			expect:            ExpectWatchEventsExact([]watch.Event{added(pod1), added(pod2), added(pod3)}),
 		},
 		{
 			name:              "allowWatchBookmarks=false, sendInitialEvents=true, RV=beforeTest",
@@ -2681,7 +2702,7 @@ func RunTestWatchResync(ctx context.Context, t *testing.T, store storage.Interfa
 			podsBeforeWatch:   []*example.Pod{pod1},
 			podsBeforeResync:  []*example.Pod{pod2},
 			podsAfterResync:   []*example.Pod{pod3},
-			expect:            []watch.Event{added(pod1), added(pod2), added(pod3)},
+			expect:            ExpectWatchEventsExact([]watch.Event{added(pod1), added(pod2), added(pod3)}),
 		},
 		{
 			name:             "legacy, RV=beforeTest",
@@ -2689,7 +2710,7 @@ func RunTestWatchResync(ctx context.Context, t *testing.T, store storage.Interfa
 			podsBeforeWatch:  []*example.Pod{pod1},
 			podsBeforeResync: []*example.Pod{pod2},
 			podsAfterResync:  []*example.Pod{pod3},
-			expect:           []watch.Event{added(pod1), added(pod2), added(pod3)},
+			expect:           ExpectWatchEventsExact([]watch.Event{added(pod1), added(pod2), added(pod3)}),
 		},
 		{
 			name:                "allowWatchBookmarks=true, sendInitialEvents=true, RV=beforeWatch",
@@ -2699,8 +2720,8 @@ func RunTestWatchResync(ctx context.Context, t *testing.T, store storage.Interfa
 			podsBeforeWatch:     []*example.Pod{pod1},
 			podsBeforeResync:    []*example.Pod{pod2},
 			podsAfterResync:     []*example.Pod{pod3},
-			expectEtcd:          []watch.Event{added(pod1), initialBookmarkWithPod1RV, added(pod2), added(pod3)},
-			expectCacher:        []watch.Event{added(pod1), initialBookmarkWithPod1RV, added(pod2), added(pod3), bookmarkWithPod3RV},
+			expectEtcd:          ExpectWatchEventsExact([]watch.Event{added(pod1), initialBookmarkWithPod1RV, added(pod2), added(pod3)}),
+			expectCacher:        ExpectWatchEventsExact([]watch.Event{added(pod1), initialBookmarkWithPod1RV, added(pod2), added(pod3), bookmarkWithPod3RV}),
 		},
 		{
 			name:                "allowWatchBookmarks=true, sendInitialEvents=false, RV=beforeWatch",
@@ -2710,8 +2731,8 @@ func RunTestWatchResync(ctx context.Context, t *testing.T, store storage.Interfa
 			podsBeforeWatch:     []*example.Pod{pod1},
 			podsBeforeResync:    []*example.Pod{pod2},
 			podsAfterResync:     []*example.Pod{pod3},
-			expectEtcd:          []watch.Event{added(pod2), added(pod3)},
-			expectCacher:        []watch.Event{added(pod2), added(pod3), bookmarkWithPod3RV},
+			expectEtcd:          ExpectWatchEventsExact([]watch.Event{added(pod2), added(pod3)}),
+			expectCacher:        ExpectWatchEventsExact([]watch.Event{added(pod2), added(pod3), bookmarkWithPod3RV}),
 		},
 		{
 			name:              "allowWatchBookmarks=false, sendInitialEvents=false, RV=beforeWatch",
@@ -2720,7 +2741,7 @@ func RunTestWatchResync(ctx context.Context, t *testing.T, store storage.Interfa
 			podsBeforeWatch:   []*example.Pod{pod1},
 			podsBeforeResync:  []*example.Pod{pod2},
 			podsAfterResync:   []*example.Pod{pod3},
-			expect:            []watch.Event{added(pod2), added(pod3)},
+			expect:            ExpectWatchEventsExact([]watch.Event{added(pod2), added(pod3)}),
 		},
 		{
 			name:              "allowWatchBookmarks=false, sendInitialEvents=true, RV=beforeWatch",
@@ -2729,7 +2750,7 @@ func RunTestWatchResync(ctx context.Context, t *testing.T, store storage.Interfa
 			podsBeforeWatch:   []*example.Pod{pod1},
 			podsBeforeResync:  []*example.Pod{pod2},
 			podsAfterResync:   []*example.Pod{pod3},
-			expect:            []watch.Event{added(pod1), added(pod2), added(pod3)},
+			expect:            ExpectWatchEventsExact([]watch.Event{added(pod1), added(pod2), added(pod3)}),
 		},
 		{
 			name:             "legacy, RV=beforeWatch",
@@ -2737,7 +2758,7 @@ func RunTestWatchResync(ctx context.Context, t *testing.T, store storage.Interfa
 			podsBeforeWatch:  []*example.Pod{pod1},
 			podsBeforeResync: []*example.Pod{pod2},
 			podsAfterResync:  []*example.Pod{pod3},
-			expect:           []watch.Event{added(pod2), added(pod3)},
+			expect:           ExpectWatchEventsExact([]watch.Event{added(pod2), added(pod3)}),
 		},
 		{
 			name:                "allowWatchBookmarks=true, sendInitialEvents=true, RV=beforeResync",
@@ -2747,7 +2768,7 @@ func RunTestWatchResync(ctx context.Context, t *testing.T, store storage.Interfa
 			podsBeforeWatch:     []*example.Pod{pod1},
 			podsBeforeResync:    []*example.Pod{pod2},
 			podsAfterResync:     []*example.Pod{pod3},
-			expectCacher:        []watch.Event{added(pod1), added(pod2), initialBookmarkWithPod2RV, added(pod3), bookmarkWithPod3RV},
+			expectCacher:        ExpectWatchEventsExact([]watch.Event{added(pod1), added(pod2), initialBookmarkWithPod2RV, added(pod3), bookmarkWithPod3RV}),
 		},
 		{
 			name:                "allowWatchBookmarks=true, sendInitialEvents=false, RV=beforeResync",
@@ -2757,8 +2778,8 @@ func RunTestWatchResync(ctx context.Context, t *testing.T, store storage.Interfa
 			podsBeforeWatch:     []*example.Pod{pod1},
 			podsBeforeResync:    []*example.Pod{pod2},
 			podsAfterResync:     []*example.Pod{pod3},
-			expectEtcd:          []watch.Event{added(pod3)},
-			expectCacher:        []watch.Event{added(pod3), bookmarkWithPod3RV},
+			expectEtcd:          ExpectWatchEventsExact([]watch.Event{added(pod3)}),
+			expectCacher:        ExpectWatchEventsExact([]watch.Event{added(pod3), bookmarkWithPod3RV}),
 		},
 		{
 			name:              "allowWatchBookmarks=false, sendInitialEvents=false, RV=beforeResync",
@@ -2767,7 +2788,7 @@ func RunTestWatchResync(ctx context.Context, t *testing.T, store storage.Interfa
 			podsBeforeWatch:   []*example.Pod{pod1},
 			podsBeforeResync:  []*example.Pod{pod2},
 			podsAfterResync:   []*example.Pod{pod3},
-			expect:            []watch.Event{added(pod3)},
+			expect:            ExpectWatchEventsExact([]watch.Event{added(pod3)}),
 		},
 		{
 			name:              "allowWatchBookmarks=false, sendInitialEvents=true, RV=beforeResync",
@@ -2776,7 +2797,7 @@ func RunTestWatchResync(ctx context.Context, t *testing.T, store storage.Interfa
 			podsBeforeWatch:   []*example.Pod{pod1},
 			podsBeforeResync:  []*example.Pod{pod2},
 			podsAfterResync:   []*example.Pod{pod3},
-			expectCacher:      []watch.Event{added(pod1), added(pod2), added(pod3)},
+			expectCacher:      ExpectWatchEventsExact([]watch.Event{added(pod1), added(pod2), added(pod3)}),
 		},
 		{
 			name:             "legacy, RV=beforeResync",
@@ -2784,7 +2805,7 @@ func RunTestWatchResync(ctx context.Context, t *testing.T, store storage.Interfa
 			podsBeforeWatch:  []*example.Pod{pod1},
 			podsBeforeResync: []*example.Pod{pod2},
 			podsAfterResync:  []*example.Pod{pod3},
-			expect:           []watch.Event{added(pod3)},
+			expect:           ExpectWatchEventsExact([]watch.Event{added(pod3)}),
 		},
 		{
 			name:                "compacted at watch RV before resync, RV=beforeWatch",
@@ -2793,7 +2814,7 @@ func RunTestWatchResync(ctx context.Context, t *testing.T, store storage.Interfa
 			podsBeforeResync:    []*example.Pod{pod2},
 			compactBeforeResync: pod1,
 			podsAfterResync:     []*example.Pod{pod3},
-			expect:              []watch.Event{added(pod2), added(pod3)},
+			expect:              ExpectWatchEventsExact([]watch.Event{added(pod2), added(pod3)}),
 		},
 		{
 			name:                "compacted past watch RV before resync, RV=beforeWatch",
@@ -2802,7 +2823,7 @@ func RunTestWatchResync(ctx context.Context, t *testing.T, store storage.Interfa
 			podsBeforeResync:    []*example.Pod{pod2},
 			compactBeforeResync: pod2,
 			podsAfterResync:     []*example.Pod{pod3},
-			expect:              []watch.Event{added(pod2), added(pod3)},
+			expect:              ExpectWatchEventsExact([]watch.Event{added(pod2), added(pod3)}),
 		},
 		{
 			name:                "compacted before resync, sendInitialEvents=false, RV=unset",
@@ -2811,7 +2832,7 @@ func RunTestWatchResync(ctx context.Context, t *testing.T, store storage.Interfa
 			podsBeforeResync:    []*example.Pod{pod2},
 			compactBeforeResync: pod2,
 			podsAfterResync:     []*example.Pod{pod3},
-			expect:              []watch.Event{added(pod2), added(pod3)},
+			expect:              ExpectWatchEventsExact([]watch.Event{added(pod2), added(pod3)}),
 		},
 		{
 			name:                "compacted before resync, sendInitialEvents=false, RV=0",
@@ -2821,7 +2842,7 @@ func RunTestWatchResync(ctx context.Context, t *testing.T, store storage.Interfa
 			podsBeforeResync:    []*example.Pod{pod2},
 			compactBeforeResync: pod2,
 			podsAfterResync:     []*example.Pod{pod3},
-			expect:              []watch.Event{added(pod2), added(pod3)},
+			expect:              ExpectWatchEventsExact([]watch.Event{added(pod2), added(pod3)}),
 		},
 		{
 			name:                "compacted before resync, legacy, RV=unset",
@@ -2829,7 +2850,7 @@ func RunTestWatchResync(ctx context.Context, t *testing.T, store storage.Interfa
 			podsBeforeResync:    []*example.Pod{pod2},
 			compactBeforeResync: pod2,
 			podsAfterResync:     []*example.Pod{pod3},
-			expect:              []watch.Event{added(pod1), added(pod2), added(pod3)},
+			expect:              ExpectWatchEventsExact([]watch.Event{added(pod1), added(pod2), added(pod3)}),
 		},
 		{
 			name:                "compacted before resync, legacy, RV=0",
@@ -2838,7 +2859,7 @@ func RunTestWatchResync(ctx context.Context, t *testing.T, store storage.Interfa
 			podsBeforeResync:    []*example.Pod{pod2},
 			compactBeforeResync: pod2,
 			podsAfterResync:     []*example.Pod{pod3},
-			expect:              []watch.Event{added(pod1), added(pod2), added(pod3)},
+			expect:              ExpectWatchEventsExact([]watch.Event{added(pod1), added(pod2), added(pod3)}),
 		},
 		{
 			name:                "compacted before resync, allowWatchBookmarks=true, sendInitialEvents=true",
@@ -2848,24 +2869,24 @@ func RunTestWatchResync(ctx context.Context, t *testing.T, store storage.Interfa
 			podsBeforeResync:    []*example.Pod{pod2},
 			compactBeforeResync: pod2,
 			podsAfterResync:     []*example.Pod{pod3},
-			expectEtcd:          []watch.Event{added(pod1), initialBookmarkWithPod1RV, added(pod2), added(pod3)},
-			expectCacher:        []watch.Event{added(pod1), initialBookmarkWithPod1RV, added(pod2), added(pod3), bookmarkWithPod3RV},
+			expectEtcd:          ExpectWatchEventsExact([]watch.Event{added(pod1), initialBookmarkWithPod1RV, added(pod2), added(pod3)}),
+			expectCacher:        ExpectWatchEventsExact([]watch.Event{added(pod1), initialBookmarkWithPod1RV, added(pod2), added(pod3), bookmarkWithPod3RV}),
 		},
 		{
 			name:                "label selector, allowWatchBookmarks=true, sendInitialEvents=true, RV=unset",
 			allowWatchBookmarks: true,
 			sendInitialEvents:   ptr.To(true),
 			pred:                storage.SelectionPredicate{Label: labels.SelectorFromSet(labels.Set{"foo": "bar"})},
-			expectEtcd:          []watch.Event{added(pod1), initialBookmarkWithPod1RV, added(pod3)},
-			expectCacher:        []watch.Event{added(pod1), initialBookmarkWithPod1RV, added(pod3), bookmarkWithPod3RV},
+			expectEtcd:          ExpectWatchEventsExact([]watch.Event{added(pod1), initialBookmarkWithPod1RV, added(pod3)}),
+			expectCacher:        ExpectWatchEventsExact([]watch.Event{added(pod1), initialBookmarkWithPod1RV, added(pod3), bookmarkWithPod3RV}),
 		},
 		{
 			name:                "indexed field selector, allowWatchBookmarks=true, sendInitialEvents=true, RV=unset",
 			allowWatchBookmarks: true,
 			sendInitialEvents:   ptr.To(true),
 			pred:                storage.SelectionPredicate{Field: fields.ParseSelectorOrDie("spec.nodeName=node-1"), IndexFields: []string{"spec.nodeName"}},
-			expectEtcd:          []watch.Event{added(pod1), initialBookmarkWithPod1RV, added(pod3)},
-			expectCacher:        []watch.Event{added(pod1), initialBookmarkWithPod1RV, added(pod3), bookmarkWithPod3RV},
+			expectEtcd:          ExpectWatchEventsExact([]watch.Event{added(pod1), initialBookmarkWithPod1RV, added(pod3)}),
+			expectCacher:        ExpectWatchEventsExact([]watch.Event{added(pod1), initialBookmarkWithPod1RV, added(pod3), bookmarkWithPod3RV}),
 		},
 		{
 			name:                "indexed field selector, allowWatchBookmarks=true, sendInitialEvents=true, RV=beforeResync",
@@ -2873,18 +2894,100 @@ func RunTestWatchResync(ctx context.Context, t *testing.T, store storage.Interfa
 			allowWatchBookmarks: true,
 			sendInitialEvents:   ptr.To(true),
 			pred:                storage.SelectionPredicate{Field: fields.ParseSelectorOrDie("spec.nodeName=node-1"), IndexFields: []string{"spec.nodeName"}},
-			expectCacher:        []watch.Event{added(pod1), initialBookmarkWithPod2RV, added(pod3), bookmarkWithPod3RV},
+			expectCacher:        ExpectWatchEventsExact([]watch.Event{added(pod1), initialBookmarkWithPod2RV, added(pod3), bookmarkWithPod3RV}),
 		},
 		{
 			name:              "non-indexed field selector, allowWatchBookmarks=false, sendInitialEvents=false, RV=beforeTest",
 			rv:                rvBeforeTest,
 			sendInitialEvents: ptr.To(false),
 			pred:              storage.SelectionPredicate{Field: fields.ParseSelectorOrDie("metadata.name=pod-2")},
-			expect:            []watch.Event{added(pod2)},
+			expect:            ExpectWatchEventsExact([]watch.Event{added(pod2)}),
+		},
+		{
+			name:                "stalled, allowWatchBookmarks=true, sendInitialEvents=true, RV=unset",
+			allowWatchBookmarks: true,
+			sendInitialEvents:   ptr.To(true),
+			stall:               true,
+			expectEtcd:          ExpectWatchEventsExact(slices.Concat([]watch.Event{added(pod1), initialBookmarkWithPod1RV, added(pod2)}, stallEvents, []watch.Event{added(pod3)})),
+			expectCacher:        ExpectWatchEventsPrefixAndClose(slices.Concat([]watch.Event{added(pod1), initialBookmarkWithPod1RV, added(pod2)}, stallEvents), stallMin, stallMax),
+		},
+		{
+			name:                "stalled, allowWatchBookmarks=true, sendInitialEvents=false, RV=beforeWatch",
+			rv:                  rvBeforeWatch,
+			allowWatchBookmarks: true,
+			sendInitialEvents:   ptr.To(false),
+			stall:               true,
+			expectEtcd:          ExpectWatchEventsExact(slices.Concat([]watch.Event{added(pod2)}, stallEvents, []watch.Event{added(pod3)})),
+			expectCacher:        ExpectWatchEventsPrefixAndClose(slices.Concat([]watch.Event{added(pod2)}, stallEvents), stallMin, stallMax),
+		},
+		{
+			name:              "stalled, allowWatchBookmarks=false, sendInitialEvents=false, RV=beforeWatch",
+			rv:                rvBeforeWatch,
+			sendInitialEvents: ptr.To(false),
+			stall:             true,
+			expectEtcd:        ExpectWatchEventsExact(slices.Concat([]watch.Event{added(pod2)}, stallEvents, []watch.Event{added(pod3)})),
+			expectCacher:      ExpectWatchEventsPrefixAndClose(slices.Concat([]watch.Event{added(pod2)}, stallEvents), stallMin, stallMax),
+		},
+		{
+			name:                "stalled, namespace field selector, allowWatchBookmarks=true, sendInitialEvents=false, RV=beforeWatch",
+			rv:                  rvBeforeWatch,
+			allowWatchBookmarks: true,
+			sendInitialEvents:   ptr.To(false),
+			pred:                storage.SelectionPredicate{Field: fields.OneTermEqualSelector("metadata.namespace", ns)},
+			stall:               true,
+			expectEtcd:          ExpectWatchEventsExact(slices.Concat([]watch.Event{added(pod2)}, stallEvents, []watch.Event{added(pod3)})),
+			expectCacher:        ExpectWatchEventsPrefixAndClose(slices.Concat([]watch.Event{added(pod2)}, stallEvents), stallMin, stallMax),
+		},
+		{
+			name:                "stalled, label selector, allowWatchBookmarks=true, sendInitialEvents=true, RV=unset",
+			allowWatchBookmarks: true,
+			sendInitialEvents:   ptr.To(true),
+			pred:                storage.SelectionPredicate{Label: labels.SelectorFromSet(labels.Set{"foo": "bar"})},
+			stall:               true,
+			expectEtcd:          ExpectWatchEventsExact(slices.Concat([]watch.Event{added(pod1), initialBookmarkWithPod1RV}, stallEvents, []watch.Event{added(pod3)})),
+			expectCacher:        ExpectWatchEventsPrefixAndClose(slices.Concat([]watch.Event{added(pod1), initialBookmarkWithPod1RV}, stallEvents), stallMin, stallMax),
+		},
+		{
+			name:                "stalled, indexed field selector, allowWatchBookmarks=true, sendInitialEvents=true, RV=unset",
+			allowWatchBookmarks: true,
+			sendInitialEvents:   ptr.To(true),
+			pred:                storage.SelectionPredicate{Field: fields.ParseSelectorOrDie("spec.nodeName=node-1"), IndexFields: []string{"spec.nodeName"}},
+			stall:               true,
+			expectEtcd:          ExpectWatchEventsExact(slices.Concat([]watch.Event{added(pod1), initialBookmarkWithPod1RV}, stallEvents, []watch.Event{added(pod3)})),
+			expectCacher:        ExpectWatchEventsPrefixAndClose(slices.Concat([]watch.Event{added(pod1), initialBookmarkWithPod1RV}, stallEvents), stallMin, stallMax),
+		},
+		{
+			name:                "compacted after stall, allowWatchBookmarks=true, sendInitialEvents=false, RV=beforeWatch",
+			rv:                  rvBeforeWatch,
+			allowWatchBookmarks: true,
+			sendInitialEvents:   ptr.To(false),
+			stall:               true,
+			compactAfterResync:  stallCompacted,
+			expectEtcd:          ExpectWatchEventsExact(slices.Concat([]watch.Event{added(pod2)}, stallEvents, []watch.Event{added(pod3)})),
+			expectCacher:        ExpectWatchEventsPrefixAndClose(slices.Concat([]watch.Event{added(pod2)}, stallEvents), stallMin, stallMax),
+		},
+		{
+			name:                "compacted after stall, allowWatchBookmarks=true, sendInitialEvents=true, RV=unset",
+			allowWatchBookmarks: true,
+			sendInitialEvents:   ptr.To(true),
+			stall:               true,
+			compactAfterResync:  stallCompacted,
+			expectEtcd:          ExpectWatchEventsExact(slices.Concat([]watch.Event{added(pod1), initialBookmarkWithPod1RV, added(pod2)}, stallEvents, []watch.Event{added(pod3)})),
+			expectCacher:        ExpectWatchEventsPrefixAndClose(slices.Concat([]watch.Event{added(pod1), initialBookmarkWithPod1RV, added(pod2)}, stallEvents), stallMin, stallMax),
+		},
+		{
+			name:                "compacted after stall, indexed field selector, allowWatchBookmarks=true, sendInitialEvents=false, RV=beforeTest",
+			rv:                  rvBeforeTest,
+			allowWatchBookmarks: true,
+			sendInitialEvents:   ptr.To(false),
+			pred:                storage.SelectionPredicate{Field: fields.ParseSelectorOrDie("spec.nodeName=node-1"), IndexFields: []string{"spec.nodeName"}},
+			stall:               true,
+			compactAfterResync:  stallCompacted,
+			expectEtcd:          ExpectWatchEventsExact(slices.Concat([]watch.Event{added(pod1)}, stallEvents, []watch.Event{added(pod3)})),
+			expectCacher:        ExpectWatchEventsPrefixAndClose(slices.Concat([]watch.Event{added(pod1)}, stallEvents), stallMin, stallMax),
 		},
 	}
 
-	ns := "ns"
 	createPods := func(pods []*example.Pod) {
 		for _, pod := range pods {
 			pod.Namespace = ns
@@ -2894,7 +2997,7 @@ func RunTestWatchResync(ctx context.Context, t *testing.T, store storage.Interfa
 	}
 
 	pod0 := makePod("0")
-	pod0.Namespace = "other"
+	pod0.Namespace = otherNs
 	require.NoError(t, store.Create(ctx, computePodKey(pod0), pod0, pod0, 0))
 	require.NoError(t, store.Delete(ctx, computePodKey(pod0), pod0, nil, storage.ValidateAllObjectFunc, nil, storage.DeleteOptions{}))
 	compact(ctx, t, pod0.ResourceVersion)
@@ -2910,7 +3013,18 @@ func RunTestWatchResync(ctx context.Context, t *testing.T, store storage.Interfa
 	beforeResyncRV := beforeWatchRV + 1
 	afterResyncRV := beforeResyncRV + 1
 
+	var compactBeforeResync, compactAfterResync *example.Pod
+	if !stall {
+		compactBeforeResync = []*example.Pod{nil, pod1, pod2}[compactIdx]
+	} else if compactIdx == 1 {
+		compactAfterResync = stallCompacted
+	}
+
+	activeWatches := 0
 	for _, tt := range tests {
+		if tt.stall != stall || tt.compactBeforeResync != compactBeforeResync || tt.compactAfterResync != compactAfterResync {
+			continue
+		}
 		t.Run(tt.name, func(t *testing.T) {
 			expectedOut := tt.expect
 			if isCacher && tt.expectCacher != nil {
@@ -2922,6 +3036,7 @@ func RunTestWatchResync(ctx context.Context, t *testing.T, store storage.Interfa
 			if expectedOut == nil {
 				t.Skip("scenario not supported")
 			}
+			activeWatches++
 
 			var rv string
 			switch tt.rv {
@@ -2970,19 +3085,63 @@ func RunTestWatchResync(ctx context.Context, t *testing.T, store storage.Interfa
 			require.NoError(t, watchErr)
 			defer w.Stop()
 
-			TestCheckResultsInStrictOrder(t, w, expectedOut)
+			expectedOut.Check(t, w)
 		})
+	}
+	if activeWatches == 0 {
+		return
+	}
+	var (
+		otherWatch    watch.Interface
+		otherWatchErr error
+	)
+	otherWatchOpened := make(chan struct{})
+	if stall {
+		go func() {
+			defer close(otherWatchOpened)
+			otherWatch, otherWatchErr = store.Watch(ctx, fmt.Sprintf("/pods/%s", otherNs), storage.ListOptions{
+				ResourceVersion: strconv.FormatUint(beforeWatchRV, 10),
+				Predicate:       storage.Everything,
+				Recursive:       true,
+			})
+		}()
 	}
 	time.Sleep(100 * time.Millisecond)
 	if resync != nil {
 		resync()
 	}
+	if stall {
+		<-otherWatchOpened
+		require.NoError(t, otherWatchErr)
+		defer otherWatch.Stop()
+	}
 
 	createPods([]*example.Pod{pod2})
-	compact(ctx, t, pod2.ResourceVersion)
+	if compactBeforeResync != nil {
+		compact(ctx, t, compactBeforeResync.ResourceVersion)
+	}
 	if resync != nil {
 		resync()
 	}
+
+	if stall {
+		createPods(stallPods)
+		otherNsPod.Namespace = otherNs
+		otherNsPod.ResourceVersion = ""
+		require.NoError(t, store.Create(ctx, computePodKey(otherNsPod), otherNsPod, otherNsPod, 0))
+		otherNsEvent := added(otherNsPod)
+		testCheckResult(t, otherWatch, &otherNsEvent)
+		if resync != nil {
+			resync()
+		}
+		if compactAfterResync != nil {
+			compact(ctx, t, compactAfterResync.ResourceVersion)
+			if resync != nil {
+				resync()
+			}
+		}
+	}
+
 	createPods([]*example.Pod{pod3})
 	if triggerBookmarks != nil {
 		triggerBookmarks()

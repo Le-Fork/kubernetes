@@ -524,7 +524,8 @@ func NewFramework(ctx context.Context, r Registry, profile *config.KubeScheduler
 		f.computeBatchablePlugins()
 	}
 
-	// Put default preemption as the only RankNodesPlugin
+	// Put default preemption as the only RankNodesPlugin and check that all PostFilter
+	// plugins are also enabled at PodGroupPostFilter, as PodGroups only run the latter.
 	if utilfeature.DefaultFeatureGate.Enabled(features.GenericWorkload) {
 		hasPodGroupPostFilter := slices.ContainsFunc(f.podGroupPostFilterPlugins, func(pl fwk.PodGroupPostFilterPlugin) bool {
 			return pl.Name() == names.DefaultPreemption
@@ -540,6 +541,18 @@ func NewFramework(ctx context.Context, r Registry, profile *config.KubeScheduler
 			f.rankNodesPlugins = append(f.rankNodesPlugins, rnp)
 		} else {
 			logger.V(2).Info("GenericWorkload is enabled, but default preemption plugin does not fulfill RankNodesPlugin interface. Node ranking will not be used.")
+		}
+
+		for _, pl := range f.postFilterPlugins {
+			if !slices.ContainsFunc(f.podGroupPostFilterPlugins, func(pgpl fwk.PodGroupPostFilterPlugin) bool {
+				return pgpl.Name() == pl.Name()
+			}) {
+				msg := "PostFilter plugin does not implement PodGroupPostFilterPlugin; it will not be run for PodGroups or CompositePodGroups"
+				if _, ok := pl.(fwk.PodGroupPostFilterPlugin); ok {
+					msg = "PostFilter plugin implements PodGroupPostFilterPlugin but is not enabled; it will not be run for PodGroups or CompositePodGroups"
+				}
+				logger.Error(nil, msg, "plugin", pl.Name(), "profile", f.profileName)
+			}
 		}
 	}
 
@@ -1856,6 +1869,14 @@ func (f *frameworkImpl) GetNodeHint(ctx context.Context, pod *v1.Pod, signature 
 
 func (f *frameworkImpl) StoreScheduleResults(ctx context.Context, signature fwk.PodSignature, hintedNode, chosenNode string, otherNodes framework.SortedScoredNodes, cycleCount int64) {
 	f.batch.StoreScheduleResults(ctx, signature, hintedNode, chosenNode, otherNodes, cycleCount)
+}
+
+func (f *frameworkImpl) IsBatchingDisabled() bool {
+	return f.batch.IsDisabled()
+}
+
+func (f *frameworkImpl) SetBatchingDisabled(disabled bool) {
+	f.batch.SetDisabled(disabled)
 }
 
 // RunPreBindPlugins runs the set of configured prebind plugins. It returns a
