@@ -173,6 +173,7 @@ const (
 	ContainerRestartRules featuregate.Feature = "ContainerRestartRules"
 
 	// owner: @sreeram-venkitesh
+	// kep: https://kep.k8s.io/4960
 	//
 	// Enables configuring custom stop signals for containers from container lifecycle
 	ContainerStopSignals featuregate.Feature = "ContainerStopSignals"
@@ -822,6 +823,13 @@ const (
 	// Enables controlling pod ranking on replicaset scale-down.
 	PodDeletionCost featuregate.Feature = "PodDeletionCost"
 
+	// owner: @danielvegamyhre @ameukam
+	// kep: https://kep.k8s.io/4443
+	//
+	// Allows naming Job pod failure policy rules; a matching FailJob rule
+	// includes its name in the Job failure condition message.
+	PodFailurePolicyName featuregate.Feature = "PodFailurePolicyName"
+
 	// owner: @KevinTMtz
 	// kep: https://kep.k8s.io/5526
 	//
@@ -1327,6 +1335,7 @@ var defaultVersionedKubernetesFeatureGates = map[featuregate.Feature]featuregate
 
 	ContainerStopSignals: {
 		{Version: version.MustParse("1.33"), Default: false, PreRelease: featuregate.Alpha},
+		{Version: version.MustParse("1.38"), Default: true, PreRelease: featuregate.Beta},
 	},
 
 	CrossNamespaceVolumeDataSource: {
@@ -1588,6 +1597,7 @@ var defaultVersionedKubernetesFeatureGates = map[featuregate.Feature]featuregate
 
 	InPlacePodVerticalScalingMemoryBackedVolumes: {
 		{Version: version.MustParse("1.37"), Default: false, PreRelease: featuregate.Alpha},
+		{Version: version.MustParse("1.38"), Default: true, PreRelease: featuregate.Beta},
 	},
 
 	InPlacePodVerticalScalingSchedulerPreemption: {
@@ -1795,6 +1805,10 @@ var defaultVersionedKubernetesFeatureGates = map[featuregate.Feature]featuregate
 	PodDeletionCost: {
 		{Version: version.MustParse("1.21"), Default: false, PreRelease: featuregate.Alpha},
 		{Version: version.MustParse("1.22"), Default: true, PreRelease: featuregate.Beta},
+	},
+
+	PodFailurePolicyName: {
+		{Version: version.MustParse("1.38"), Default: false, PreRelease: featuregate.Alpha},
 	},
 
 	PodLevelResourceManagers: {
@@ -2302,6 +2316,7 @@ var defaultVersionedKubernetesFeatureGates = map[featuregate.Feature]featuregate
 
 	kcmfeatures.CloudControllerManagerWatchBasedRoutesReconciliation: {
 		{Version: version.MustParse("1.35"), Default: false, PreRelease: featuregate.Alpha},
+		{Version: version.MustParse("1.38"), Default: false, PreRelease: featuregate.Beta},
 	},
 
 	kcmfeatures.CloudControllerManagerWebhook: {
@@ -2559,6 +2574,8 @@ var defaultKubernetesFeatureGateDependencies = map[featuregate.Feature][]feature
 	PodCertificateRequest: {},
 
 	PodDeletionCost: {},
+
+	PodFailurePolicyName: {},
 
 	PodLevelResourceManagers: {PodLevelResources},
 
