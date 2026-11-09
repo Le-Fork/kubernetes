@@ -113,6 +113,19 @@ const (
 	// Enables using streaming RPCs for CRI list operations.
 	CRIListStreaming featuregate.Feature = "CRIListStreaming"
 
+	// owner: @cniackz
+	// kep: https://kep.k8s.io/6058
+	//
+	// Lets kubelet reconstruct a CSI global mount that its pod directory no
+	// longer describes, instead of leaving it staged with no in-memory record.
+	// Covers a global mount whose pod directory is gone, left behind when a
+	// node reboots during NodeUnstageVolume (issue #121937), and one whose
+	// pod-local vol_data.json is missing or corrupt (issue #101791). Either
+	// way the volume stays out of node.status.volumesInUse, so the
+	// attach/detach controller may attach it elsewhere and corrupt an RWO
+	// filesystem.
+	CSIGlobalMountReconstruction featuregate.Feature = "CSIGlobalMountReconstruction"
+
 	// owner: @aramase
 	// kep:  http://kep.k8s.io/5538
 	//
@@ -912,12 +925,6 @@ const (
 	// bursting into resources requested at higher QoS levels (memory only for now)
 	QOSReserved featuregate.Feature = "QOSReserved"
 
-	// owner: @AkihiroSuda
-	// kep: https://kep.k8s.io/3857
-	//
-	// Allows recursive read-only mounts.
-	RecursiveReadOnlyMounts featuregate.Feature = "RecursiveReadOnlyMounts"
-
 	// owner: @lauralorenz
 	// kep: https://kep.k8s.io/4603
 	//
@@ -1282,6 +1289,10 @@ var defaultVersionedKubernetesFeatureGates = map[featuregate.Feature]featuregate
 		{Version: version.MustParse("1.36"), Default: false, PreRelease: featuregate.Alpha},
 	},
 
+	CSIGlobalMountReconstruction: {
+		{Version: version.MustParse("1.38"), Default: false, PreRelease: featuregate.Alpha},
+	},
+
 	CSIServiceAccountTokenSecrets: {
 		{Version: version.MustParse("1.35"), Default: true, PreRelease: featuregate.Beta},
 		{Version: version.MustParse("1.36"), Default: true, PreRelease: featuregate.GA, LockToDefault: true}, // GA in 1.36; remove in 1.39
@@ -1475,6 +1486,7 @@ var defaultVersionedKubernetesFeatureGates = map[featuregate.Feature]featuregate
 
 	EmptyDirVolumeMode: {
 		{Version: version.MustParse("1.37"), Default: false, PreRelease: featuregate.Alpha},
+		{Version: version.MustParse("1.38"), Default: true, PreRelease: featuregate.Beta},
 	},
 
 	EnvFiles: {
@@ -1872,12 +1884,6 @@ var defaultVersionedKubernetesFeatureGates = map[featuregate.Feature]featuregate
 		{Version: version.MustParse("1.11"), Default: false, PreRelease: featuregate.Alpha},
 	},
 
-	RecursiveReadOnlyMounts: {
-		{Version: version.MustParse("1.30"), Default: false, PreRelease: featuregate.Alpha},
-		{Version: version.MustParse("1.31"), Default: true, PreRelease: featuregate.Beta},
-		{Version: version.MustParse("1.33"), Default: true, PreRelease: featuregate.GA, LockToDefault: true}, // remove in 1.36
-	},
-
 	ReduceDefaultCrashLoopBackOffDecay: {
 		{Version: version.MustParse("1.33"), Default: false, PreRelease: featuregate.Alpha},
 	},
@@ -2154,7 +2160,7 @@ var defaultVersionedKubernetesFeatureGates = map[featuregate.Feature]featuregate
 	},
 
 	genericfeatures.ConsistentGetFromCache: {
-		{Version: version.MustParse("1.38"), Default: false, PreRelease: featuregate.Alpha},
+		{Version: version.MustParse("1.38"), Default: true, PreRelease: featuregate.Beta},
 	},
 
 	genericfeatures.ConsistentListFromCacheSkipTimeoutFallback: {
@@ -2365,6 +2371,7 @@ var defaultKubernetesFeatureGateDependencies = map[featuregate.Feature][]feature
 
 	CRIListStreaming: {},
 
+	CSIGlobalMountReconstruction:  {},
 	CSIServiceAccountTokenSecrets: {},
 
 	CSIVolumeHealth: {},
@@ -2600,8 +2607,6 @@ var defaultKubernetesFeatureGateDependencies = map[featuregate.Feature][]feature
 	ProcMountType: {UserNamespacesSupport},
 
 	QOSReserved: {},
-
-	RecursiveReadOnlyMounts: {},
 
 	ReduceDefaultCrashLoopBackOffDecay: {},
 
