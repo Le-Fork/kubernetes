@@ -18829,7 +18829,7 @@ func schema_k8sio_api_certificates_v1beta1_CertificateSigningRequestSpec(ref com
 						},
 					},
 				},
-				Required: []string{"request", "usages"},
+				Required: []string{"request"},
 			},
 		},
 	}
@@ -19209,7 +19209,7 @@ func schema_k8sio_api_certificates_v1beta1_PodCertificateRequestSpec(ref common.
 						},
 					},
 				},
-				Required: []string{"signerName", "podName", "podUID", "serviceAccountName", "serviceAccountUID", "nodeName", "nodeUID", "stubPKCS10Request"},
+				Required: []string{"signerName", "podName", "podUID", "serviceAccountName", "serviceAccountUID", "nodeName", "nodeUID"},
 			},
 		},
 	}
@@ -20222,7 +20222,7 @@ func schema_k8sio_api_core_v1_Binding(ref common.ReferenceCallback) common.OpenA
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Description: "Binding ties one object to another; for example, a pod is bound to a node by a scheduler.",
+				Description: "Binding assigns a pod to a node.",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"kind": {
@@ -20248,7 +20248,7 @@ func schema_k8sio_api_core_v1_Binding(ref common.ReferenceCallback) common.OpenA
 					},
 					"target": {
 						SchemaProps: spec.SchemaProps{
-							Description: "target is the target object that you want to bind to the standard object.",
+							Description: "target is the node that you want to bind the pod to.",
 							Default:     map[string]interface{}{},
 							Ref:         ref(corev1.ObjectReference{}.OpenAPIModelName()),
 						},
@@ -49861,6 +49861,13 @@ func schema_k8sio_api_resource_v1_DeviceTaintSelector(ref common.ReferenceCallba
 							Format:      "",
 						},
 					},
+					"all": {
+						SchemaProps: spec.SchemaProps{
+							Description: "all explicitly selects every device from every driver in the cluster when set to true. It must not be combined with driver, pool, or device: those must all be unset when all is true.\n\nLeaving driver, pool, and device all unset also selects every device, for historical reasons, but doing so without setting all is deprecated and may be rejected in a future release. Set all explicitly instead.",
+							Type:        []string{"boolean"},
+							Format:      "",
+						},
+					},
 				},
 			},
 		},
@@ -51080,6 +51087,13 @@ func schema_k8sio_api_resource_v1alpha3_DeviceTaintSelector(ref common.Reference
 						SchemaProps: spec.SchemaProps{
 							Description: "device is the name of the device. If device is set, only devices with that name are selected. This field corresponds to slice.spec.devices[].name.\n\nSetting also driver and pool may be required to avoid ambiguity, but is not required.",
 							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"all": {
+						SchemaProps: spec.SchemaProps{
+							Description: "all explicitly selects every device from every driver in the cluster when set to true. It must not be combined with driver, pool, or device: those must all be unset when all is true.\n\nLeaving driver, pool, and device all unset also selects every device, for historical reasons, but doing so without setting all is deprecated and may be rejected in a future release. Set all explicitly instead.",
+							Type:        []string{"boolean"},
 							Format:      "",
 						},
 					},
@@ -55728,6 +55742,13 @@ func schema_k8sio_api_resource_v1beta2_DeviceTaintSelector(ref common.ReferenceC
 						SchemaProps: spec.SchemaProps{
 							Description: "device is the device name. If device is set, only devices with that name are selected. This field corresponds to slice.spec.devices[].name.\n\nSetting also driver and pool may be required to avoid ambiguity, but is not required.",
 							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"all": {
+						SchemaProps: spec.SchemaProps{
+							Description: "all explicitly selects every device from every driver in the cluster when set to true. It must not be combined with driver, pool, or device: those must all be unset when all is true.\n\nLeaving driver, pool, and device all unset also selects every device, for historical reasons, but doing so without setting all is deprecated and may be rejected in a future release. Set all explicitly instead.",
+							Type:        []string{"boolean"},
 							Format:      "",
 						},
 					},
