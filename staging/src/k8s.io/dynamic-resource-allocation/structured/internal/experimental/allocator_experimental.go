@@ -358,6 +358,7 @@ func (a *Allocator) Allocate(ctx context.Context, node *v1.Node, claims []*resou
 
 	// We can estimate the size based on what we need to allocate.
 	alloc.allocatingDevices = make(map[DeviceID]sets.Set[int], minDevicesTotal)
+	alloc.allocatingAdminDevices = make(map[DeviceID]sets.Set[int])
 
 	if alloc.loggerV6 != nil {
 		alloc.loggerV6.Info("Gathered information about devices", "numAllocatedDevices", len(alloc.allocatedState.AllocatedDevices), "minDevicesToBeAllocated", minDevicesTotal)
@@ -715,12 +716,15 @@ type allocator struct {
 	// pool ID -> counter set name -> running intersection.
 	consumedCompatibilityGroups map[PoolID]map[string]compatibilityGroupIntersection
 	requestData                 map[requestIndices]requestData // one entry per request with no subrequests and one entry per subrequest
-	// allocatingDevices tracks which devices will be newly allocated for a
-	// particular attempt to find a solution. The map is indexed by device
-	// and its values represent for which of a pod's claims the device will
-	// be allocated.
+	// allocatingDevices tracks which devices will be newly allocated without
+	// admin access for a particular attempt to find a solution. The map is
+	// indexed by device and its values represent for which of a pod's claims
+	// the device will be allocated.
 	// Claims are identified by their index in claimsToAllocate.
 	allocatingDevices map[DeviceID]sets.Set[int]
+	// allocatingAdminDevices does the same for admin access. Only requests of the
+	// same claim check it, because admin access must not block other claims.
+	allocatingAdminDevices map[DeviceID]sets.Set[int]
 	// allocatingCapacity tracks the amount of device capacity that will be newly allocated
 	// for a particular attempt to find a solution.
 	// The map is indexed by device ID, and each value represents the accumulated capacity
@@ -869,110 +873,6 @@ type constraint interface {
 	remove(request *requestData, device *draapi.Device, deviceID DeviceID)
 }
 
-// deviceAttributeListAsSet is set-based representation of DeviceAttributeListType.
-// This has the same structure as DeviceAttributeListType, but uses sets.Set instead of slices.
-type deviceAttributeListAsSet struct {
-	intValue     sets.Set[int64]
-	boolValue    sets.Set[bool]
-	stringValue  sets.Set[string]
-	versionValue sets.Set[string]
-}
-
-// intersection returns the new intersection set of two attribute sets as a new set.
-// Returns nil if there is no intersection or if the types do not match.
-func (s *deviceAttributeListAsSet) intersection(other *deviceAttributeListAsSet) *deviceAttributeListAsSet {
-	result := &deviceAttributeListAsSet{}
-
-	switch {
-	case s.intValue != nil && other.intValue != nil:
-		intersection := s.intValue.Intersection(other.intValue)
-		if intersection.Len() == 0 {
-			return nil
-		}
-		result.intValue = intersection
-		return result
-	case s.boolValue != nil && other.boolValue != nil:
-		intersection := s.boolValue.Intersection(other.boolValue)
-		if intersection.Len() == 0 {
-			return nil
-		}
-		result.boolValue = intersection
-		return result
-	case s.stringValue != nil && other.stringValue != nil:
-		intersection := s.stringValue.Intersection(other.stringValue)
-		if intersection.Len() == 0 {
-			return nil
-		}
-		result.stringValue = intersection
-		return result
-	case s.versionValue != nil && other.versionValue != nil:
-		intersection := s.versionValue.Intersection(other.versionValue)
-		if intersection.Len() == 0 {
-			return nil
-		}
-		result.versionValue = intersection
-		return result
-	default:
-		// Type mismatch
-		return nil
-	}
-}
-
-// attributeAsSet creates deviceAttributeListAsSet from DeviceAttribute.
-// Both scalar and list attributes are converted to set representation.
-// For scalar values, creates a single-element set.
-// For list values, creates a set from all elements.
-// Returns nil if the attribute type is unknown.
-func attributeAsSet(attribute any) *deviceAttributeListAsSet {
-	if attribute == nil {
-		return nil
-	}
-
-	result := &deviceAttributeListAsSet{}
-
-	switch attribute := attribute.(type) {
-	case []int64:
-		result.intValue = sets.New(attribute...)
-		return result
-	case []bool:
-		result.boolValue = sets.New(attribute...)
-		return result
-	case []string:
-		result.stringValue = sets.New(attribute...)
-		return result
-	case []semver.Version:
-		result.versionValue = sets.New[string]()
-		for _, ver := range attribute {
-			result.versionValue.Insert(versionWithoutBuild(ver))
-		}
-		return result
-	case int64:
-		result.intValue = sets.New(attribute)
-		return result
-	case bool:
-		result.boolValue = sets.New(attribute)
-		return result
-	case string:
-		result.stringValue = sets.New(attribute)
-		return result
-	case semver.Version:
-		result.versionValue = sets.New(versionWithoutBuild(attribute))
-		return result
-	default:
-		return nil
-	}
-}
-
-// versionWithoutBuild renders a version as a string while ignoring build
-// metadata, matching the precedence semantics of Version.Equals (semver
-// build metadata has no effect on equality). This keeps list-type attribute
-// sets consistent with the scalar comparison in matchAttributeConstraint and
-// distinctAttributeConstraint, which also use Equals.
-func versionWithoutBuild(ver semver.Version) string {
-	ver.Build = nil
-	return ver.String()
-}
-
 // matchAttributeConstraint compares an attribute value across devices.
 // All devices must share the same value. When the set of devices is
 // empty, any device that has the attribute can be added. After that,
@@ -994,7 +894,10 @@ type matchAttributeConstraint struct {
 	// For list values (when DRAListTypeAttributes feature gate is enabled).
 	// intersectionStack[len-1] is the current intersection; each add() pushes and each remove() pops,
 	// so backtracking always restores the intersection to its pre-add state.
-	intersectionStack []*deviceAttributeListAsSet
+	// An entry is an attribute value in the same form that draapi stores one,
+	// which may be a single value once only one is left in common.
+	// Entries may be values owned by the ResourceSlice and must not be modified.
+	intersectionStack []any
 
 	numDevices int
 }
@@ -1020,13 +923,11 @@ func (m *matchAttributeConstraint) add(request *requestData, device *draapi.Devi
 		return false, nil
 	}
 
-	// Check value and convert to a set if needed.
-	var newSet *deviceAttributeListAsSet
+	// Check the value.
 	if m.features.ListTypeAttributes {
-		newSet = attributeAsSet(attribute)
-		if newSet == nil {
-			// Internal error: attribute was already validated by lookupAttribute, so
-			// attributeAsSet must recognize its type. This should never be reached.
+		if !comparableAttributeValue(attribute) {
+			// Internal error: attribute was already validated by lookupAttribute,
+			// so its type must be one we know. This should never be reached.
 			return false, fmt.Errorf("internal error: unexpected attribute type %T", attribute)
 		}
 	} else {
@@ -1045,10 +946,10 @@ func (m *matchAttributeConstraint) add(request *requestData, device *draapi.Devi
 	}
 
 	if m.numDevices == 0 {
-		// The first device can always get picked. Validation above ensures that
-		// we have a valid set resp. attribute.
+		// The first device can always get picked. Validation above ensures
+		// that the value is one we can compare.
 		if m.features.ListTypeAttributes {
-			m.intersectionStack = append(m.intersectionStack, newSet)
+			m.intersectionStack = append(m.intersectionStack, attribute)
 		} else {
 			m.attribute = attribute
 		}
@@ -1061,17 +962,17 @@ func (m *matchAttributeConstraint) add(request *requestData, device *draapi.Devi
 
 	// Check if we are matching with set-based logic or scalar-based logic
 	if m.features.ListTypeAttributes {
-		// Set-based matching: check if there is non-empty intersection
+		// Set-based matching: check that something is left in common.
 		current := m.intersectionStack[m.numDevices-1]
-		narrowed := current.intersection(newSet)
-		if narrowed == nil {
+		intersection, ok := intersect(current, attribute)
+		if !ok {
 			if m.loggerV7 != nil {
 				m.loggerV7.Info("Attribute values have no common elements")
 			}
 			return false, nil
 		}
-		// Push a narrowed copy so remove() can pop back to the previous intersection.
-		m.intersectionStack = append(m.intersectionStack, narrowed)
+		// Push it so that remove() can pop back to the previous intersection.
+		m.intersectionStack = append(m.intersectionStack, intersection)
 	} else {
 		switch existing := m.attribute.(type) {
 		case string:
@@ -1436,7 +1337,7 @@ func (alloc *allocator) allocateOne(r deviceIndices, allocateSubRequest bool, st
 				deviceID := DeviceID{Driver: pool.Driver, Pool: pool.Pool, Device: slice.Spec.Devices[deviceIndex].Name}
 
 				// Checking for "in use" is cheap and thus gets done first.
-				if request.adminAccess() && alloc.allocatingDeviceForClaim(deviceID, r.claimIndex) {
+				if alloc.allocatingDeviceForClaim(deviceID, r.claimIndex) {
 					if alloc.loggerV7 != nil {
 						alloc.loggerV7.Info("Device in use in same claim", "device", deviceID)
 					}
@@ -1668,7 +1569,7 @@ func (alloc *allocator) allocateDevice(r deviceIndices, device deviceWithID, mus
 	if alloc.features.ConsumableCapacity {
 		allowMultipleAllocations = device.AllowMultipleAllocations != nil && *device.AllowMultipleAllocations
 	}
-	if !allowMultipleAllocations && request.adminAccess() && alloc.allocatingDeviceForClaim(device.id, r.claimIndex) {
+	if !allowMultipleAllocations && alloc.allocatingDeviceForClaim(device.id, r.claimIndex) {
 		if alloc.loggerV7 != nil {
 			alloc.loggerV7.Info("Device in use in same claim", "device", device.id)
 		}
@@ -1713,9 +1614,9 @@ func (alloc *allocator) allocateDevice(r deviceIndices, device deviceWithID, mus
 		return false, nil, nil
 	}
 
-	// Skip the counter check for an allow-multiple device in use: its counters are already
-	// accounted for, so a further share must not charge them again.
-	skipCounterCheck := allowMultipleAllocations && alloc.deviceCapacityInUse(device.id)
+	// Admin access does not reserve counters. Further shares of a device with an
+	// existing ordinary allocation must not reserve its fixed counters again.
+	skipCounterCheck := request.adminAccess() || (allowMultipleAllocations && alloc.deviceCapacityInUse(device.id))
 
 	var parentRequestName string
 	if requestData.parentRequest != nil {
@@ -1772,16 +1673,7 @@ func (alloc *allocator) allocateDevice(r deviceIndices, device deviceWithID, mus
 			}
 			return false, nil, nil
 		}
-		if request.adminAccess() && allowMultipleAllocations {
-			// The device passed the check for the counters it consumes (ConsumesCounters).
-			// Admin access creates no capacity entry, which is how a later share of this
-			// device knows those counters are already charged. Release them here, or that
-			// share charges them a second time.
-			// TODO: decide whether admin access should bypass the counter check entirely.
-			alloc.deallocateCountersForDevice(device)
-		} else {
-			state.countersReserved = true
-		}
+		state.countersReserved = true
 	}
 
 	// Might be tainted, in which case the taint has to be tolerated.
@@ -1817,11 +1709,19 @@ func (alloc *allocator) allocateDevice(r deviceIndices, device deviceWithID, mus
 	}
 
 	if !allowMultipleAllocations {
-		if alloc.allocatingDevices[device.id] == nil {
-			alloc.allocatingDevices[device.id] = make(sets.Set[int])
+		if request.adminAccess() {
+			if alloc.allocatingAdminDevices[device.id] == nil {
+				alloc.allocatingAdminDevices[device.id] = make(sets.Set[int])
+			}
+			alloc.allocatingAdminDevices[device.id].Insert(r.claimIndex)
+			state.adminDeviceMarked = true
+		} else {
+			if alloc.allocatingDevices[device.id] == nil {
+				alloc.allocatingDevices[device.id] = make(sets.Set[int])
+			}
+			alloc.allocatingDevices[device.id].Insert(r.claimIndex)
+			state.deviceMarked = true
 		}
-		alloc.allocatingDevices[device.id].Insert(r.claimIndex)
-		state.deviceMarked = true
 	}
 
 	consumedCapacity := NewConsumedCapacity()
@@ -1903,6 +1803,7 @@ type deviceRollbackState struct {
 	countersReserved           bool
 	constraintsAdded           int
 	deviceMarked               bool
+	adminDeviceMarked          bool
 	capacityInserted           bool
 	capacityEntryExisted       bool
 	resultAdded                bool
@@ -1930,6 +1831,9 @@ func (alloc *allocator) rollbackDevice(r deviceIndices, device deviceWithID, req
 	}
 	if state.deviceMarked {
 		alloc.allocatingDevices[device.id].Delete(r.claimIndex)
+	}
+	if state.adminDeviceMarked {
+		alloc.allocatingAdminDevices[device.id].Delete(r.claimIndex)
 	}
 	for i := state.constraintsAdded - 1; i >= 0; i-- {
 		alloc.constraints[r.claimIndex][i].remove(requestData, device.Device, device.id)
@@ -2107,8 +2011,10 @@ func (alloc *allocator) allocatingDeviceForAnyClaim(deviceID DeviceID) bool {
 	return alloc.allocatingDevices[deviceID].Len() > 0
 }
 
+// allocatingDeviceForClaim checks devices allocated with and without admin access,
+// to avoid using the same device twice in one claim.
 func (alloc *allocator) allocatingDeviceForClaim(deviceID DeviceID, claimIndex int) bool {
-	return alloc.allocatingDevices[deviceID].Has(claimIndex)
+	return alloc.allocatingDevices[deviceID].Has(claimIndex) || alloc.allocatingAdminDevices[deviceID].Has(claimIndex)
 }
 
 func (alloc *allocator) allocatingCapacityForAnyClaim(deviceID DeviceID) bool {

@@ -1102,6 +1102,43 @@ func TestAllocator(t *testing.T,
 
 	testcases := map[string]AllocatorTestCase{
 		"empty": {},
+		"compatibility-groups-admin-access-does-not-restrict-normal-request": {
+			features: Features{PartitionableDevices: true, CompatibilityGroups: true, AdminAccess: true},
+			claimsToAllocate: objects(claim(claim0).withRequests(
+				deviceRequest(req0, classA, 1).withAdminAccess(),
+				deviceRequest(req1, classA, 1),
+			)),
+			classes: objects(class(classA, driverA)),
+			slices: unwrapResourceSlices(
+				sliceWithDevices(slice1, node1, resourcePool(pool1, 2), driverA,
+					device(device1).withDeviceCounterConsumption(
+						deviceCounterConsumptionWithGroups(counterSet1, map[string]resource.Quantity{counter0: two}, "mig"),
+					),
+					device(device2).withDeviceCounterConsumption(
+						deviceCounterConsumptionWithGroups(counterSet1, map[string]resource.Quantity{counter0: two}, "vgpu"),
+					),
+				),
+				sliceWithCounterSets(slice2, node1, resourcePool(pool1, 2), driverA,
+					counterSet(counterSet1, map[string]resource.Quantity{counter0: four}),
+				),
+			),
+			node: node(node1, region1),
+			// A claim does not get the same device twice, so the regular request uses device2.
+			expectResults: []any{matchAllocationResult(
+				localNodeSelector(node1),
+				deviceAllocationResult(req0, driverA, pool1, device1, true),
+				deviceAllocationResult(req1, driverA, pool1, device2, false),
+			)},
+			expectWithFeatures: func(expectResults []any, expectError types.GomegaMatcher, expectErrorIs error, features Features) ([]any, types.GomegaMatcher, error) {
+				if !features.AdminAccess {
+					return nil, g.MatchError(g.ContainSubstring("admin access is requested, but the feature is disabled")), nil
+				}
+				if !features.PartitionableDevices || !features.CompatibilityGroups {
+					return nil, nil, nil
+				}
+				return expectResults, expectError, expectErrorIs
+			},
+		},
 		// Two requests in one claim, both landing on the same counter set with the
 		// same compatibility group: they can be co-allocated.
 		"compatibility-groups-compatible": {
@@ -2367,9 +2404,165 @@ func TestAllocator(t *testing.T,
 				sliceWithDevices(slice1, node1, pool1, driverA, device(device1)),
 			),
 			node: node(node1, region1),
-			// Suspicious: the result depends on the order of the claims. Admin
-			// access should not block a regular request for the same device.
+			expectResults: []any{
+				matchAllocationResult(
+					localNodeSelector(node1),
+					deviceAllocationResult(req0, driverA, pool1, device1, true),
+				),
+				matchAllocationResult(
+					localNodeSelector(node1),
+					deviceAllocationResult(req0, driverA, pool1, device1, false),
+				),
+			},
+			expectErrorWithoutFeatures: g.MatchError(g.ContainSubstring("admin access is requested, but the feature is disabled")),
+		},
+		"admin-access-before-regular-request-same-claim-single-device": {
+			features: Features{
+				AdminAccess: true,
+			},
+			claimsToAllocate: objects(
+				claim(claim0).withRequests(
+					deviceRequest(req0, classA, 1).withAdminAccess(),
+					allDeviceRequest(req1, classA),
+				),
+			),
+			classes: objects(class(classA, driverA)),
+			slices: unwrapResourceSlices(
+				sliceWithDevices(slice1, node1, pool1, driverA, device(device1)),
+			),
+			node: node(node1, region1),
+			// A claim must not get the same exclusive device twice.
 			expectResults:              nil,
+			expectErrorWithoutFeatures: g.MatchError(g.ContainSubstring("admin access is requested, but the feature is disabled")),
+		},
+		"admin-access-after-regular-request-same-claim-single-device": {
+			features: Features{
+				AdminAccess: true,
+			},
+			claimsToAllocate: objects(
+				claim(claim0).withRequests(
+					deviceRequest(req0, classA, 1),
+					allDeviceRequest(req1, classA).withAdminAccess(),
+				),
+			),
+			classes: objects(class(classA, driverA)),
+			slices: unwrapResourceSlices(
+				sliceWithDevices(slice1, node1, pool1, driverA, device(device1)),
+			),
+			node: node(node1, region1),
+			// A claim must not get the same exclusive device twice.
+			expectResults:              nil,
+			expectErrorWithoutFeatures: g.MatchError(g.ContainSubstring("admin access is requested, but the feature is disabled")),
+		},
+		"admin-access-before-regular-request-same-claim-two-devices": {
+			features: Features{
+				AdminAccess: true,
+			},
+			claimsToAllocate: objects(
+				claim(claim0).withRequests(
+					deviceRequest(req0, classA, 1).withAdminAccess(),
+					deviceRequest(req1, classA, 1),
+				),
+			),
+			classes: objects(class(classA, driverA)),
+			slices: unwrapResourceSlices(
+				sliceWithDevices(slice1, node1, pool1, driverA, device(device1), device(device2)),
+			),
+			node: node(node1, region1),
+			// A claim does not get the same device twice, so the second request moves on.
+			expectResults: []any{matchAllocationResult(
+				localNodeSelector(node1),
+				deviceAllocationResult(req0, driverA, pool1, device1, true),
+				deviceAllocationResult(req1, driverA, pool1, device2, false),
+			)},
+			expectErrorWithoutFeatures: g.MatchError(g.ContainSubstring("admin access is requested, but the feature is disabled")),
+		},
+		"admin-access-after-regular-request-same-claim-two-devices": {
+			features: Features{
+				AdminAccess: true,
+			},
+			claimsToAllocate: objects(
+				claim(claim0).withRequests(
+					deviceRequest(req0, classA, 1),
+					deviceRequest(req1, classA, 1).withAdminAccess(),
+				),
+			),
+			classes: objects(class(classA, driverA)),
+			slices: unwrapResourceSlices(
+				sliceWithDevices(slice1, node1, pool1, driverA, device(device1), device(device2)),
+			),
+			node: node(node1, region1),
+			expectResults: []any{matchAllocationResult(
+				localNodeSelector(node1),
+				deviceAllocationResult(req0, driverA, pool1, device1, false),
+				deviceAllocationResult(req1, driverA, pool1, device2, true),
+			)},
+			expectErrorWithoutFeatures: g.MatchError(g.ContainSubstring("admin access is requested, but the feature is disabled")),
+		},
+		"admin-access-consumable-capacity-twice-in-same-claim": {
+			features: Features{
+				AdminAccess:        true,
+				ConsumableCapacity: true,
+			},
+			claimsToAllocate: objects(
+				claim(claim0).withRequests(
+					deviceRequest(req0, classA, 1).withAdminAccess(),
+					deviceRequest(req1, classA, 1).withAdminAccess(),
+				),
+			),
+			classes: objects(class(classA, driverA)),
+			slices: unwrapResourceSlices(
+				sliceWithDevices(slice1, node1, pool1, driverA, device(device1).withAllowMultipleAllocations()),
+			),
+			node: node(node1, region1),
+			// Devices which allow multiple allocations are not marked, so admin access
+			// may get the same device for different requests of the same claim.
+			expectResults: []any{
+				matchAllocationResult(
+					localNodeSelector(node1),
+					deviceAllocationResult(req0, driverA, pool1, device1, true),
+					deviceAllocationResult(req1, driverA, pool1, device1, true),
+				),
+			},
+			expectWithFeatures: func(expectResults []any, expectError types.GomegaMatcher, expectErrorIs error, features Features) ([]any, types.GomegaMatcher, error) {
+				if !features.AdminAccess {
+					return nil, g.MatchError(g.ContainSubstring("admin access is requested, but the feature is disabled")), nil
+				}
+				if !features.ConsumableCapacity {
+					// Without the feature the device is exclusive.
+					return nil, nil, nil
+				}
+				return expectResults, expectError, expectErrorIs
+			},
+		},
+		"admin-access-backtrack-releases-device": {
+			features: Features{
+				AdminAccess: true,
+			},
+			claimsToAllocate: objects(
+				claim(claim0).withRequests(
+					deviceRequest(req0, classA, 1).withAdminAccess(),
+					// Only fits on device1 if req0 releases it when backtracking.
+					deviceRequest(req1, classA, 1).withAdminAccess().withSelectors(resourceapi.DeviceSelector{
+						CEL: &resourceapi.CELDeviceSelector{
+							Expression: fmt.Sprintf(`device.attributes["%s"].stringAttribute == "stringAttributeValue1"`, driverA),
+						},
+					}),
+				),
+			),
+			classes: objects(class(classA, driverA)),
+			slices: unwrapResourceSlices(
+				sliceWithDevices(slice1, node1, pool1, driverA,
+					device(device1).withAttribute("stringAttribute", "stringAttributeValue1"),
+					device(device2).withAttribute("stringAttribute", "stringAttributeValue2"),
+				),
+			),
+			node: node(node1, region1),
+			expectResults: []any{matchAllocationResult(
+				localNodeSelector(node1),
+				deviceAllocationResult(req0, driverA, pool1, device2, true),
+				deviceAllocationResult(req1, driverA, pool1, device1, true),
+			)},
 			expectErrorWithoutFeatures: g.MatchError(g.ContainSubstring("admin access is requested, but the feature is disabled")),
 		},
 		"all-devices-slice-without-devices-prioritized-list": {
@@ -7786,7 +7979,7 @@ func TestAllocator(t *testing.T,
 			slices: unwrapResourceSlices(
 				sliceWithDevices(slice1, node1, resourcePool(pool1, 2), driverA,
 					device(device1).withCapacity(capacity0, two).withAllowMultipleAllocations().withDeviceCounterConsumption(
-						deviceCounterConsumption(counterSet1, map[string]resource.Quantity{counter0: two}), // More than what's available, cannot be allocated.
+						deviceCounterConsumption(counterSet1, map[string]resource.Quantity{counter0: two}),
 					),
 				),
 				sliceWithCounterSets(slice2, node1, resourcePool(pool1, 2), driverA,
@@ -7794,8 +7987,10 @@ func TestAllocator(t *testing.T,
 				),
 			),
 			node: node(node1, region1),
-			// Partitionable devices does not skip counter checks for completely new access to a device.
-			expectResults: nil,
+			expectResults: []any{matchAllocationResult(
+				localNodeSelector(node1),
+				deviceAllocationResult(req0, driverA, pool1, device1, true),
+			)},
 			expectWithFeatures: func(expectResults []any, expectError types.GomegaMatcher, expectErrorIs error, features Features) ([]any, types.GomegaMatcher, error) {
 				if !features.AdminAccess || !features.ConsumableCapacity {
 					return nil, g.MatchError(g.ContainSubstring("feature is disabled")), nil
@@ -7845,9 +8040,9 @@ func TestAllocator(t *testing.T,
 			},
 		},
 		"consumable-capacity-admin-access-then-ordinary-claim-same-device-counters": {
-			// The admin claim reserves the device's counters but creates no capacity entry.
-			// The ordinary claim must still share the device without charging
-			// the counters (total 1, cost 1) a second time.
+			// The admin claim reserves no counters and creates no capacity entry.
+			// The ordinary claim can still share the device and charges the counters
+			// (total 1, cost 1) once.
 			features: Features{ConsumableCapacity: true, AdminAccess: true, PartitionableDevices: true},
 			claimsToAllocate: objects(
 				claim(claim0).withRequests(deviceRequest(req0, classA, 1).withAdminAccess()),
@@ -9195,6 +9390,226 @@ func TestAllocator(t *testing.T,
 			expectWithFeatures: expectDistinctAttributeWithLists,
 		},
 
+		// A derived attribute can evaluate to a list, so both constraints must
+		// compare the results of request-scoped CEL expressions as sets.
+		"list-attributes-match-constraint-on-derived-list-values-with-common-elements": {
+			features: Features{
+				ListTypeAttributes: true,
+				DerivedAttributes:  true,
+			},
+			claimsToAllocate: objects(claimWithRequests(
+				claim0,
+				[]resourceapi.DeviceConstraint{
+					{
+						Requests:       []string{req0, req1},
+						MatchAttribute: ptr.To(resourceapi.FullyQualifiedName("derived/tags")),
+					},
+				},
+				requestWithDerivedAttributes(req0, classA, 1,
+					[]resourceapi.DeviceDerivedAttribute{{
+						Name:       "derived/tags",
+						Expression: fmt.Sprintf(`device.attributes["%s"]["tags"]`, driverA),
+					}},
+				),
+				requestWithDerivedAttributes(req1, classB, 1,
+					[]resourceapi.DeviceDerivedAttribute{{
+						Name:       "derived/tags",
+						Expression: fmt.Sprintf(`device.attributes["%s"]["labels"]`, driverB),
+					}},
+				),
+			)),
+			classes: objects(class(classA, driverA), class(classB, driverB)),
+			slices: unwrapResourceSlices(
+				sliceWithDevices(slice1, node1, pool1, driverA,
+					device(device1).withAttribute("tags", []string{"x", "y"}),
+				),
+				sliceWithDevices(slice2, node1, pool2, driverB,
+					device(device2).withAttribute("labels", []string{"y", "z"}),
+				),
+			),
+			node: node(node1, region1),
+
+			expectResults: []any{matchAllocationResult(
+				localNodeSelector(node1),
+				deviceAllocationResult(req0, driverA, pool1, device1, false),
+				deviceAllocationResult(req1, driverB, pool2, device2, false),
+			)},
+			expectWithFeatures: expectDerivedAttributeWithLists,
+		},
+		"list-attributes-match-constraint-on-derived-list-values-without-common-elements": {
+			features: Features{
+				ListTypeAttributes: true,
+				DerivedAttributes:  true,
+			},
+			claimsToAllocate: objects(claimWithRequests(
+				claim0,
+				[]resourceapi.DeviceConstraint{
+					{
+						Requests:       []string{req0, req1},
+						MatchAttribute: ptr.To(resourceapi.FullyQualifiedName("derived/tags")),
+					},
+				},
+				requestWithDerivedAttributes(req0, classA, 1,
+					[]resourceapi.DeviceDerivedAttribute{{
+						Name:       "derived/tags",
+						Expression: fmt.Sprintf(`device.attributes["%s"]["tags"]`, driverA),
+					}},
+				),
+				requestWithDerivedAttributes(req1, classB, 1,
+					[]resourceapi.DeviceDerivedAttribute{{
+						Name:       "derived/tags",
+						Expression: fmt.Sprintf(`device.attributes["%s"]["labels"]`, driverB),
+					}},
+				),
+			)),
+			classes: objects(class(classA, driverA), class(classB, driverB)),
+			slices: unwrapResourceSlices(
+				sliceWithDevices(slice1, node1, pool1, driverA,
+					device(device1).withAttribute("tags", []string{"x", "y"}),
+				),
+				sliceWithDevices(slice2, node1, pool2, driverB,
+					device(device2).withAttribute("labels", []string{"z"}),
+				),
+			),
+			node: node(node1, region1),
+
+			expectResults:      nil,
+			expectWithFeatures: expectDerivedAttributeWithLists,
+		},
+
+		"list-attributes-distinct-constraint-on-derived-list-values-with-common-elements": {
+			features: Features{
+				ListTypeAttributes: true,
+				DerivedAttributes:  true,
+				ConsumableCapacity: true,
+			},
+			claimsToAllocate: objects(claimWithRequests(
+				claim0,
+				[]resourceapi.DeviceConstraint{
+					{
+						Requests:          []string{req0, req1},
+						DistinctAttribute: new(resourceapi.FullyQualifiedName("derived/tags")),
+					},
+				},
+				requestWithDerivedAttributes(req0, classA, 1,
+					[]resourceapi.DeviceDerivedAttribute{{
+						Name:       "derived/tags",
+						Expression: fmt.Sprintf(`device.attributes["%s"]["tags"]`, driverA),
+					}},
+				),
+				requestWithDerivedAttributes(req1, classB, 1,
+					[]resourceapi.DeviceDerivedAttribute{{
+						Name:       "derived/tags",
+						Expression: fmt.Sprintf(`device.attributes["%s"]["labels"]`, driverB),
+					}},
+				),
+			)),
+			classes: objects(class(classA, driverA), class(classB, driverB)),
+			slices: unwrapResourceSlices(
+				sliceWithDevices(slice1, node1, pool1, driverA,
+					device(device1).withAttribute("tags", []string{"x", "y"}),
+				),
+				sliceWithDevices(slice2, node1, pool2, driverB,
+					device(device2).withAttribute("labels", []string{"y", "z"}),
+				),
+			),
+			node: node(node1, region1),
+
+			expectResults:      nil,
+			expectWithFeatures: expectDistinctDerivedAttributeWithLists,
+		},
+		"list-attributes-distinct-constraint-on-derived-list-values-without-common-elements": {
+			features: Features{
+				ListTypeAttributes: true,
+				DerivedAttributes:  true,
+				ConsumableCapacity: true,
+			},
+			claimsToAllocate: objects(claimWithRequests(
+				claim0,
+				[]resourceapi.DeviceConstraint{
+					{
+						Requests:          []string{req0, req1},
+						DistinctAttribute: new(resourceapi.FullyQualifiedName("derived/tags")),
+					},
+				},
+				requestWithDerivedAttributes(req0, classA, 1,
+					[]resourceapi.DeviceDerivedAttribute{{
+						Name:       "derived/tags",
+						Expression: fmt.Sprintf(`device.attributes["%s"]["tags"]`, driverA),
+					}},
+				),
+				requestWithDerivedAttributes(req1, classB, 1,
+					[]resourceapi.DeviceDerivedAttribute{{
+						Name:       "derived/tags",
+						Expression: fmt.Sprintf(`device.attributes["%s"]["labels"]`, driverB),
+					}},
+				),
+			)),
+			classes: objects(class(classA, driverA), class(classB, driverB)),
+			slices: unwrapResourceSlices(
+				sliceWithDevices(slice1, node1, pool1, driverA,
+					device(device1).withAttribute("tags", []string{"x", "y"}),
+				),
+				sliceWithDevices(slice2, node1, pool2, driverB,
+					device(device2).withAttribute("labels", []string{"z"}),
+				),
+			),
+			node: node(node1, region1),
+
+			expectResults: []any{matchAllocationResult(
+				localNodeSelector(node1),
+				deviceAllocationResult(req0, driverA, pool1, device1, false),
+				deviceAllocationResult(req1, driverB, pool2, device2, false),
+			)},
+			expectWithFeatures: expectDistinctDerivedAttributeWithLists,
+		},
+		"list-attributes-distinct-constraint-on-derived-list-values-backtracking": {
+			features: Features{
+				ListTypeAttributes: true,
+				DerivedAttributes:  true,
+				ConsumableCapacity: true,
+			},
+			claimsToAllocate: objects(claimWithRequests(
+				claim0,
+				[]resourceapi.DeviceConstraint{
+					{
+						Requests:          []string{req0, req1},
+						DistinctAttribute: new(resourceapi.FullyQualifiedName("derived/tags")),
+					},
+				},
+				requestWithDerivedAttributes(req0, classA, 1,
+					[]resourceapi.DeviceDerivedAttribute{{
+						Name:       "derived/tags",
+						Expression: fmt.Sprintf(`device.attributes["%s"]["tags"]`, driverA),
+					}},
+				),
+				requestWithDerivedAttributes(req1, classB, 1,
+					[]resourceapi.DeviceDerivedAttribute{{
+						Name:       "derived/tags",
+						Expression: fmt.Sprintf(`device.attributes["%s"]["labels"]`, driverB),
+					}},
+				),
+			)),
+			classes: objects(class(classA, driverA), class(classB, driverB)),
+			slices: unwrapResourceSlices(
+				sliceWithDevices(slice1, node1, pool1, driverA,
+					device(device1).withAttribute("tags", []string{"x", "y"}),
+					device(device2).withAttribute("tags", []string{"w"}),
+				),
+				sliceWithDevices(slice2, node1, pool2, driverB,
+					device(device3).withAttribute("labels", []string{"y", "z"}),
+				),
+			),
+			node: node(node1, region1),
+
+			expectResults: []any{matchAllocationResult(
+				localNodeSelector(node1),
+				deviceAllocationResult(req0, driverA, pool1, device2, false),
+				deviceAllocationResult(req1, driverB, pool2, device3, false),
+			)},
+			expectWithFeatures: expectDistinctDerivedAttributeWithLists,
+		},
+
 		"allocation-mode-all-with-multi-host-resource-pool": {
 			claimsToAllocate: objects(claimWithRequests(claim0, nil, resourceapi.DeviceRequest{
 				Name: req0,
@@ -9735,7 +10150,7 @@ func TestAllocator(t *testing.T,
 				return expectResults, expectError, expectErrorIs
 			},
 		},
-		"partitionable-devices-admin-access-backtrack-releases-counters": {
+		"partitionable-devices-admin-access-does-not-reserve-counters-across-requests": {
 			features: Features{AdminAccess: true, PartitionableDevices: true},
 			claimsToAllocate: objects(
 				claim(claim0).withRequests(
@@ -9746,7 +10161,6 @@ func TestAllocator(t *testing.T,
 			classes: objects(class(classA, driverA)),
 			slices: unwrapResourceSlices(
 				sliceWithDevices(slice1, node1, resourcePool(pool1, 2), driverA,
-					// req0 takes the large device first, which leaves no counters for req1.
 					device(device1).withDeviceCounterConsumption(
 						deviceCounterConsumption(counterSet1, map[string]resource.Quantity{counter0: two}),
 					),
@@ -9762,10 +10176,11 @@ func TestAllocator(t *testing.T,
 				),
 			),
 			node: node(node1, region1),
+			// A claim does not get the same device twice, so the second request uses device2.
 			expectResults: []any{matchAllocationResult(
 				localNodeSelector(node1),
-				withAdminAccess(deviceAllocationResult(req0, driverA, pool1, device2, true)),
-				withAdminAccess(deviceAllocationResult(req1, driverA, pool1, device3, true)),
+				deviceAllocationResult(req0, driverA, pool1, device1, true),
+				deviceAllocationResult(req1, driverA, pool1, device2, true),
 			)},
 			expectWithFeatures: func(expectResults []any, expectError types.GomegaMatcher, expectErrorIs error, features Features) ([]any, types.GomegaMatcher, error) {
 				if !features.AdminAccess {
@@ -9871,7 +10286,10 @@ func TestAllocator(t *testing.T,
 		"partitionable-devices-admin-access-nothing-allocated": {
 			features: Features{AdminAccess: true, PartitionableDevices: true},
 			claimsToAllocate: objects(
-				claim(claim0).withRequests(deviceRequest(req0, classA, 1).withAdminAccess()),
+				claim(claim0).withRequests(
+					deviceRequest(req0, classA, 1).withAdminAccess(),
+					deviceRequest(req1, classA, 1),
+				),
 			),
 			classes: objects(class(classA, driverA)),
 			slices: unwrapResourceSlices(
@@ -9888,9 +10306,11 @@ func TestAllocator(t *testing.T,
 				),
 			),
 			node: node(node1, region1),
+			// A claim does not get the same device twice, so the regular request uses device2.
 			expectResults: []any{matchAllocationResult(
 				localNodeSelector(node1),
-				withAdminAccess(*deviceRequestAllocationResult(req0, driverA, pool1, device1).DeviceRequestAllocationResult),
+				deviceAllocationResult(req0, driverA, pool1, device1, true),
+				deviceAllocationResult(req1, driverA, pool1, device2, false),
 			)},
 			expectWithFeatures: func(expectResults []any, expectError types.GomegaMatcher, expectErrorIs error, features Features) ([]any, types.GomegaMatcher, error) {
 				if !features.AdminAccess {
@@ -9956,10 +10376,10 @@ func TestAllocator(t *testing.T,
 				),
 			),
 			node: node(node1, region1),
-			// Suspicious: device2 is allocated, so device1 is only unavailable because of
-			// counters, and admin access does not bypass that. The admin might want
-			// access to device2 in this case, but does not get that either.
-			expectResults: nil,
+			expectResults: []any{matchAllocationResult(
+				localNodeSelector(node1),
+				deviceAllocationResult(req0, driverA, pool1, device1, true),
+			)},
 			expectWithFeatures: func(expectResults []any, expectError types.GomegaMatcher, expectErrorIs error, features Features) ([]any, types.GomegaMatcher, error) {
 				if !features.AdminAccess {
 					return nil, g.MatchError(g.ContainSubstring("feature is disabled")), nil
@@ -10724,6 +11144,24 @@ func expectDistinctAttributeWithLists(expectResults []any, expectError types.Gom
 		return nil, g.MatchError(g.ContainSubstring("unsupported attribute value")), nil
 	}
 	return expectResults, expectError, expectErrorIs
+}
+
+func expectDerivedAttributeWithLists(expectResults []any, expectError types.GomegaMatcher, expectErrorIs error, features Features) ([]any, types.GomegaMatcher, error) {
+	switch {
+	case !features.DerivedAttributes:
+		return nil, g.MatchError(g.ContainSubstring("cannot handle request with derived attributes, the feature is disabled")), nil
+	case !features.ListTypeAttributes:
+		return nil, g.MatchError(g.ContainSubstring("unsupported attribute value")), nil
+	}
+	return expectResults, expectError, expectErrorIs
+}
+
+func expectDistinctDerivedAttributeWithLists(expectResults []any, expectError types.GomegaMatcher, expectErrorIs error, features Features) ([]any, types.GomegaMatcher, error) {
+	// Requests are validated before constraints, so this error takes precedence.
+	if !features.DerivedAttributes {
+		return expectDerivedAttributeWithLists(expectResults, expectError, expectErrorIs, features)
+	}
+	return expectDistinctAttributeWithLists(expectResults, expectError, expectErrorIs, features)
 }
 
 // expectAdminAccessThenCapacityRequestWithCounters covers test cases where an admin access claim
