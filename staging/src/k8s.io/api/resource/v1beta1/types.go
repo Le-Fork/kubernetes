@@ -276,12 +276,72 @@ type CounterSet struct {
 	Counters map[string]Counter `json:"counters,omitempty" protobuf:"bytes,2,name=counters"`
 }
 
-// Counter describes a quantity associated with a device.
+// Counter describes a quantity that is available in a counter set.
 type Counter struct {
 	// value defines how much of a certain device counter is available.
 	//
 	// +required
+	// +k8s:minimum=0
 	Value resource.Quantity `json:"value" protobuf:"bytes,1,rep,name=value"`
+
+	// consumptionPolicy defines how devices consume this counter. The consumed
+	// amount is rounded up according to the policy and must satisfy its limits.
+	//
+	// If unset, devices can consume any amount up to the available counter value.
+	// If and only if the required amount is unspecified, then the policy default is used
+	// (if set) or the full counter value (if not set).
+	//
+	// Fixed consumption of already allocated devices is resolved using the
+	// current policy and counted even if it violates the policy's limits.
+	//
+	// +optional
+	// +k8s:optional
+	// +featureGate=DRASharedConsumableCapacity
+	ConsumptionPolicy *CapacityRequestPolicy `json:"consumptionPolicy,omitempty" protobuf:"bytes,2,opt,name=consumptionPolicy"`
+}
+
+// CounterRequirement describes how much of a counter a device consumes.
+type CounterRequirement struct {
+	// value defines the statically consumed amount.
+	//
+	// Exactly one of value or valueFrom must be specified.
+	//
+	// +optional
+	// +k8s:optional
+	// +k8s:unionMember
+	// +k8s:minimum=0
+	Value *resource.Quantity `json:"value,omitempty" protobuf:"bytes,1,opt,name=value"`
+
+	// valueFrom looks up the requested capacity value in a ResourceClaim via
+	// the capacity name. That value is then consumed from the counter instead
+	// of using a static value defined by the driver.
+	//
+	// Exactly one of value or valueFrom must be specified.
+	//
+	// +optional
+	// +k8s:optional
+	// +k8s:unionMember
+	// +featureGate=DRASharedConsumableCapacity
+	ValueFrom *CounterValueFrom `json:"valueFrom,omitempty" protobuf:"bytes,2,opt,name=valueFrom"`
+}
+
+// CounterValueFrom looks up the requested capacity value in a ResourceClaim
+// via the capacity name.
+type CounterValueFrom struct {
+	// capacityName is the name of a capacity that can be requested in a ResourceClaim.
+	// The counter value then defines a capacity that is shared between devices,
+	// in contrast to the per-device capacity defined in the device's capacity map.
+	// Typically a capacity is either shared or per-device, but it is also
+	// valid to use the same capacity name in both places. Requests then
+	// need to be satisfied by both.
+	//
+	// If this name has no domain prefix, the driver
+	// name from the ResourceSlice is used as the domain when matching against
+	// capacity requests.
+	//
+	// +required
+	// +k8s:required
+	CapacityName QualifiedName `json:"capacityName" protobuf:"bytes,1,opt,name=capacityName"`
 }
 
 // DriverNameMaxLength is the maximum valid length of a driver name in the
@@ -524,6 +584,8 @@ type BasicDevice struct {
 	// can also be requested through claims and allocated by the DRA driver.
 	// For example, a CPU DRA driver might allocate exclusive CPUs or auxiliary node memory
 	// dependencies of an accelerator device.
+	// When the device is allocated for a pod's claim, the scheduler records these resources
+	// in the pod's `status.extraNodeAllocatableResources`, as described for mapping and overhead.
 	// The keys of this map are the node-allocatable resource names (e.g., "cpu", "memory").
 	// Extended resource names are not permitted as keys.
 	// +optional
@@ -560,7 +622,10 @@ type NodeAllocatableResource struct {
 
 // NodeAllocatableMapping defines how a DRA allocation directly translates into a node allocatable resource quantity.
 // The mapping can be derived from either the count of allocated devices or the specific capacity consumed. These options are mutually exclusive.
-// Kubelet adds this mapped resource quantity from claim to both requests and limits at the pod-level cgroup, and to limits at the container-level cgroup for each container referencing the claim.
+// The scheduler records the mapped quantity in the pod's `status.extraNodeAllocatableResources`: once in the
+// requests and limits of the pod level entry, and in the limits of the container entry of each container
+// referencing the claim, so that each of these containers can use all of it while the pod level entry caps
+// their total usage.
 type NodeAllocatableMapping struct {
 	// capacityKey references a capacity name defined as a key in the
 	// `spec.devices[*].capacity` map. When this field is set, the value associated with
@@ -612,7 +677,7 @@ type NodeAllocatableMapping struct {
 
 // NodeAllocatableOverhead defines auxiliary resource overheads incurred when allocating a device.
 // Overheads can be specified as a fixed cost per pod referencing the claim, a variable cost per container reference, or both.
-// Kubelet accounts for this overhead by adding it to both the pod-level and container-level cgroups of referencing containers.
+// The scheduler records the overhead in the pod's `status.extraNodeAllocatableResources`, as described for perContainer.
 type NodeAllocatableOverhead struct {
 	// perPod is overhead applied once per pod referencing the claim on this node.
 	// This is a flat overhead incurred for every pod referencing the claim.
@@ -625,12 +690,14 @@ type NodeAllocatableOverhead struct {
 	// When both PerPod and PerContainer are specified, the total overhead allocated for each pod referencing
 	// the claim is computed as:
 	// Quantity = PerPod + (PerContainer * NumReferences)
-	// Kubelet accounts for this overhead in cgroups:
-	// - Pod-level cgroup (requests and limits): Kubelet adds PerPod + (PerContainer * NumReferences).
-	// - Container-level cgroup (limits only): Kubelet adds PerPod + PerContainer for each referencing container.
-	// This allows any single container to access the pod-level overhead, while the parent cgroup caps the total usage to account for PerPod exactly once.
-	// PerContainer overhead of a claim referenced by a non-restartable init container is counted towards
-	// the pod's peak resource calculation (see Pod `spec.initContainers`), not for the pod's entire duration.
+	// The scheduler records this overhead in the pod's `status.extraNodeAllocatableResources`:
+	// - The pod level entry (requests and limits) gets PerPod + (PerContainer * NumReferences).
+	//   PerContainer of a non-restartable init container counts towards the pod's peak resource
+	//   calculation (see Pod `spec.initContainers`), not for the pod's entire duration.
+	// - The container entry of each referencing container gets PerContainer in its requests,
+	//   and PerPod + PerContainer in its limits.
+	// This allows any single container to use the pod level overhead, while the pod level entry caps
+	// the total usage to account for PerPod exactly once.
 	// +optional
 	// +k8s:optional
 	PerContainer *resource.Quantity `json:"perContainer,omitempty" protobuf:"bytes,2,opt,name=perContainer"`
@@ -654,7 +721,7 @@ type DeviceCounterConsumption struct {
 	// +required
 	// +k8s:beta(since: "1.37")=+k8s:required
 	// +k8s:beta(since: "1.37")=+k8s:eachKey=+k8s:format=k8s-short-name
-	Counters map[string]Counter `json:"counters,omitempty" protobuf:"bytes,2,opt,name=counters"`
+	Counters map[string]CounterRequirement `json:"counters,omitempty" protobuf:"bytes,2,opt,name=counters"`
 
 	// compatibilityGroups is a list of opaque group names for
 	// this counter set consumption.
@@ -713,7 +780,15 @@ type DeviceCapacity struct {
 	RequestPolicy *CapacityRequestPolicy `json:"requestPolicy,omitempty" protobuf:"bytes,2,opt,name=requestPolicy"`
 }
 
-// CapacityRequestPolicy defines how requests consume device capacity.
+// CapacityRequestPolicy defines how requests consume device capacity and
+// how devices consume counters.
+//
+// It is used by DeviceCapacity.RequestPolicy and Counter.ConsumptionPolicy.
+// For counter consumption, capacity means the available counter value,
+// and a request means the device's required counter amount.
+// Both use the same default selection, rounding and range arithmetic,
+// including the DRAFractionalCapacityRange feature gate and the rules
+// described by CapacityRequestPolicyRange.
 //
 // Must not set more than one ValidRequestValues.
 type CapacityRequestPolicy struct {
@@ -874,33 +949,35 @@ type DeviceAttribute struct {
 
 	// ints is a non-empty list of numbers.
 	//
-	// This is an alpha field and requires enabling the DRAListTypeAttributes feature gate.
+	// This is a beta field and requires enabling the DRAListTypeAttributes feature gate (enabled by default).
 	//
 	// +optional
 	// +listType=atomic
-	// +k8s:beta(since: "1.37")=+k8s:optional
-	// +k8s:beta(since: "1.37")=+k8s:unionMember
+	// +k8s:beta(since: "1.38")=+k8s:optional
+	// +k8s:beta(since: "1.38")=+k8s:unionMember
 	// +featureGate=DRAListTypeAttributes
 	IntValues []int64 `json:"ints,omitempty" protobuf:"varint,6,opt,name=ints"`
 
 	// bools is a non-empty list of true/false values.
 	//
+	// This is a beta field and requires enabling the DRAListTypeAttributes feature gate (enabled by default).
+	//
 	// +optional
 	// +listType=atomic
-	// +k8s:beta(since: "1.37")=+k8s:optional
-	// +k8s:beta(since: "1.37")=+k8s:unionMember
+	// +k8s:beta(since: "1.38")=+k8s:optional
+	// +k8s:beta(since: "1.38")=+k8s:unionMember
 	// +featureGate=DRAListTypeAttributes
 	BoolValues []bool `json:"bools,omitempty" protobuf:"varint,7,opt,name=bools"`
 
 	// strings is a non-empty list of strings.
 	// Each string must not be longer than 64 characters.
 	//
-	// This is an alpha field and requires enabling the DRAListTypeAttributes feature gate.
+	// This is a beta field and requires enabling the DRAListTypeAttributes feature gate (enabled by default).
 	//
 	// +optional
 	// +listType=atomic
-	// +k8s:beta(since: "1.37")=+k8s:optional
-	// +k8s:beta(since: "1.37")=+k8s:unionMember
+	// +k8s:beta(since: "1.38")=+k8s:optional
+	// +k8s:beta(since: "1.38")=+k8s:unionMember
 	// +k8s:beta(since: "1.38")=+k8s:eachVal=+k8s:maxBytes=64
 	// +featureGate=DRAListTypeAttributes
 	StringValues []string `json:"strings,omitempty" protobuf:"bytes,8,opt,name=strings"`
@@ -908,12 +985,12 @@ type DeviceAttribute struct {
 	// versions is a non-empty list of semantic versions according to semver.org spec 2.0.0.
 	// Each version string must not be longer than 64 characters.
 	//
-	// This is an alpha field and requires enabling the DRAListTypeAttributes feature gate.
+	// This is a beta field and requires enabling the DRAListTypeAttributes feature gate (enabled by default).
 	//
 	// +optional
 	// +listType=atomic
-	// +k8s:beta(since: "1.37")=+k8s:optional
-	// +k8s:beta(since: "1.37")=+k8s:unionMember
+	// +k8s:beta(since: "1.38")=+k8s:optional
+	// +k8s:beta(since: "1.38")=+k8s:unionMember
 	// +featureGate=DRAListTypeAttributes
 	VersionValues []string `json:"versions,omitempty" protobuf:"bytes,9,opt,name=versions"`
 }
@@ -1463,13 +1540,19 @@ type DeviceSubRequest struct {
 
 // CapacityRequirements defines the capacity requirements for a specific device request.
 type CapacityRequirements struct {
-	// requests represent individual device resource requests for distinct resources,
-	// all of which must be provided by the device.
+	// requests represent individual device capacity requests for distinct resources.
+	// Each requested name must be defined as a device capacity and/or a shared
+	// capacity (referenced by a device through consumesCounters).
 	//
-	// This value is used as an additional filtering condition against the available capacity on the device.
+	// For a per-device capacity, this value is used as an additional
+	// filtering condition against the available capacity on the device.
 	// This is semantically equivalent to a CEL selector with
 	// `device.capacity[<domain>].<name>.compareTo(quantity(<request quantity>)) >= 0`.
 	// For example, device.capacity['test-driver.cdi.k8s.io'].counters.compareTo(quantity('2')) >= 0.
+	//
+	// With DRASharedConsumableCapacity enabled, a requested capacity may be
+	// provided as a shared capacity instead of a per-device capacity. If it is defined as both,
+	// the request must be satisfied by both independently.
 	//
 	// The domain prefix can be omitted, in which case it defaults to the driver of the
 	// device under evaluation. For example, "bandwidth: 1Gi" is equivalent to
@@ -2059,6 +2142,11 @@ type DeviceAllocationResult struct {
 // entries in allocation.devices.results.
 const AllocationResultsMaxSize = 32
 
+// DeviceRequestAllocationResultMaxConsumedCounterSets is the maximum number of
+// counter sets in DeviceRequestAllocationResult.ConsumedCounters. It matches
+// the maximum number of counter sets that one device may consume.
+const DeviceRequestAllocationResultMaxConsumedCounterSets = ResourceSliceMaxDeviceCounterConsumptionsPerDevice
+
 // DeviceRequestAllocationResult contains the allocation result for one request.
 type DeviceRequestAllocationResult struct {
 	// request is the name of the request in the claim which caused this
@@ -2191,6 +2279,98 @@ type DeviceRequestAllocationResult struct {
 	// +featureGate=DRAOptionalNodeOperations
 	// +k8s:optional
 	SkipNodeOperations []SkipNodeOperation `json:"skipNodeOperations,omitempty" protobuf:"bytes,11,rep,name=skipNodeOperations,casttype=SkipNodeOperation"`
+
+	// consumedCounters records resolved valueFrom consumption for the single device
+	// identified by this allocation result, grouped by counter set in that
+	// device's pool. Each result records only its own request-dependent amounts.
+	// The scheduler sums these amounts across non-admin allocation results,
+	// including multiple shares of the same device. Releasing one allocation
+	// releases its recorded amounts without changing those of other allocations.
+	//
+	// Quantities are resolved at allocation time from the matching claim capacity
+	// requests, including consumptionPolicy rounding. They may therefore be greater
+	// than the requested amounts. If the claim omits a mapped capacity request,
+	// consumption uses the shared counter's policy default, or its full value
+	// when no default is defined. All resolved valueFrom counters are included,
+	// even when their quantity is zero.
+	//
+	// The recorded amounts and counter set references remain authoritative if
+	// ResourceSlice mappings, defaults, or policies change. A mapping change does
+	// not move an existing allocation's consumption to a different counter set.
+	// DRA drivers can use these amounts without access to ResourceSlices.
+	//
+	// Fixed counter consumption is not recorded here. The scheduler determines
+	// fixed consumption from current ResourceSlices, including consumptionPolicy
+	// rounding, and counts it once per (driver, pool, device) with at least one
+	// non-admin allocation. If the device definition is missing, its fixed
+	// consumption is not counted.
+	// Current fixed consumption is added to the recorded request-dependent
+	// consumption; changing a counter from valueFrom to value does not replace
+	// the recorded amounts.
+	//
+	// Current counter values still define the total budget. Reducing a
+	// counter below its recorded consumption prevents further counter consumption;
+	// existing allocation results are not changed.
+	// Recorded amounts are still counted if the allocated device is no longer
+	// present in current ResourceSlices. Amounts that refer to a missing counter
+	// set or counter are ignored.
+	//
+	// ResourceSlice updates do not resize or revoke existing allocations.
+	// Drivers must ensure that updates remain compatible with existing allocations,
+	// or arrange for affected allocations to be released first.
+	//
+	// This field is populated only for non-admin allocations when
+	// DRASharedConsumableCapacity is enabled. An absent field means that no
+	// request-dependent consumption was recorded, including for allocations
+	// made before the feature was enabled.
+	// If this field is absent, the scheduler counts this allocation's
+	// request-dependent counter consumption as zero. It does not reconstruct
+	// that consumption from the device's current valueFrom mappings.
+	//
+	// The list contains at most 2 counter sets (the maximum a device may consume
+	// in a ResourceSlice), keyed by counter set name. Its order has no correspondence
+	// to the order of counter sets or devices in ResourceSlices.
+	//
+	// +optional
+	// +listType=map
+	// +listMapKey=counterSet
+	// +featureGate=DRASharedConsumableCapacity
+	// +k8s:listType=map
+	// +k8s:listMapKey=counterSet
+	// +k8s:optional
+	// +k8s:maxItems=2
+	ConsumedCounters []CounterSetConsumption `json:"consumedCounters,omitempty" protobuf:"bytes,12,rep,name=consumedCounters"`
+}
+
+// CounterSetConsumption records one allocation's resolved valueFrom consumption
+// from one counter set. The containing DeviceRequestAllocationResult identifies
+// the allocated device and its pool.
+//
+// For example, two allocations sharing a device may consume 2Gi and 3Gi from a
+// "memory" counter. Each result records only its own amount; together they
+// consume 5Gi. Releasing the first allocation leaves 3Gi charged. If the device
+// also consumes one fixed "slots" counter, that charge is accounted for
+// separately from current ResourceSlices. With unchanged slice definitions,
+// the fixed charge remains until the last non-admin allocation is released.
+type CounterSetConsumption struct {
+	// counterSet identifies a counter set in the pool named by the containing
+	// allocation result.
+	//
+	// +required
+	// +k8s:required
+	// +k8s:format=k8s-short-name
+	CounterSet string `json:"counterSet" protobuf:"bytes,1,opt,name=counterSet"`
+
+	// counters records this allocation's resolved quantity for each counter in the set.
+	// The map contains at most 32 counters; each quantity must be non-negative.
+	//
+	// +required
+	// +k8s:required
+	// +k8s:maxProperties=32
+	// +k8s:eachKey=+k8s:format=k8s-short-name
+	// +k8s:eachVal=+k8s:minimum=0
+	//nolint:kubeapilinter // Keep quantity maps consistent with the rest of the resource API.
+	Counters map[string]resource.Quantity `json:"counters" protobuf:"bytes,2,rep,name=counters"`
 }
 
 // DeviceAllocationConfiguration gets embedded in an AllocationResult.
@@ -2317,9 +2497,26 @@ type DeviceClassSpec struct {
 	// +k8s:beta(since: "1.37")=+k8s:format=k8s-extended-resource-name
 	ExtendedResourceName *string `json:"extendedResourceName,omitempty" protobuf:"bytes,4,opt,name=extendedResourceName"`
 
-	// extendedResourceCapacityRequests defines the fixed capacity
-	// amounts that the scheduler requests on every ResourceClaim it
-	// synthesizes to satisfy the extended resource of this class.
+	// extendedResourceRequest defines how the scheduler populates the
+	// device request of each ResourceClaim it synthesizes to satisfy
+	// the extended resource of this class.
+	//
+	// This is an alpha field and requires enabling the
+	// DRAExtendedResourceCapacity feature gate, which depends on
+	// DRAConsumableCapacity.
+	//
+	// +optional
+	// +featureGate=DRAExtendedResourceCapacity
+	// +k8s:optional
+	ExtendedResourceRequest *ExtendedResourceRequest `json:"extendedResourceRequest,omitempty" protobuf:"bytes,5,opt,name=extendedResourceRequest"`
+}
+
+// ExtendedResourceRequest defines fields which the scheduler copies onto the
+// device request it synthesizes for an extended resource.
+type ExtendedResourceRequest struct {
+	// capacity defines the fixed capacity amounts that the scheduler
+	// requests on every ResourceClaim it synthesizes to satisfy the
+	// extended resource of this class.
 	//
 	// The value is copied, unmodified, onto the capacity of each device
 	// request synthesized for this class, so it has the same
@@ -2332,14 +2529,9 @@ type DeviceClassSpec struct {
 	// capacities. Otherwise the extended resource requests cannot be
 	// satisfied, the same way as with a selector that matches no devices.
 	//
-	// This is an alpha field and requires enabling the
-	// DRAExtendedResourceCapacity feature gate, which depends on
-	// DRAConsumableCapacity.
-	//
 	// +optional
-	// +featureGate=DRAExtendedResourceCapacity
 	// +k8s:optional
-	ExtendedResourceCapacityRequests *CapacityRequirements `json:"extendedResourceCapacityRequests,omitempty" protobuf:"bytes,5,opt,name=extendedResourceCapacityRequests"`
+	Capacity *CapacityRequirements `json:"capacity,omitempty" protobuf:"bytes,1,opt,name=capacity"`
 }
 
 // DeviceClassConfiguration is used in DeviceClass.

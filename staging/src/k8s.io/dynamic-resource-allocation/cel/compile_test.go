@@ -487,6 +487,16 @@ var testcases = map[string]struct {
 		expectMatch: true,
 		expectCost:  11,
 	},
+	"presence-test-comparison": {
+		expression: `has(device.attributes["dra.example.com"].model) == has(device.attributes["dra.example.com"].vendor)`,
+		attributes: map[resourceapi.QualifiedName]resourceapi.DeviceAttribute{
+			"model":  {StringValue: new("a")},
+			"vendor": {StringValue: new("b")},
+		},
+		driver:      "dra.example.com",
+		expectMatch: true,
+		expectCost:  7,
+	},
 	"quantity-compare-to-dec-then-is-integer": {
 		expression:  `device.capacity["dra.example.com"].memory.compareTo(quantity("1.5Gi")) >= 0 && device.capacity["dra.example.com"].memory.isInteger()`,
 		capacity:    map[resourceapi.QualifiedName]resourceapi.DeviceCapacity{"memory": {Value: resource.MustParse("2Gi")}},
@@ -573,6 +583,16 @@ device.attributes["dra.example.com"]["version"].isGreaterThan(semver("0.0.1"))
 		driver:      "dra.example.com",
 		expectMatch: true,
 		expectCost:  18,
+	},
+	"split_driver_index_regexp": {
+		// Indexing a split() result and running a string operation on the
+		// element must stay bounded by the size of the input string. Before
+		// the element size was propagated, this estimate saturated at
+		// math.MaxUint64 and the selector was rejected as too complex.
+		expression:  `device.driver.split(".")[0].matches("^[a-z]+$")`,
+		driver:      "dra.example.com",
+		expectMatch: true,
+		expectCost:  30,
 	},
 	"check_capacity_domains": {
 		expression:  `device.capacity.exists_one(x, x == "dra.example.com")`,

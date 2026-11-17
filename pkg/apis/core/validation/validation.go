@@ -4136,6 +4136,98 @@ func validatePodHostName(spec *core.PodSpec, fldPath *field.Path) field.ErrorLis
 	return allErrs
 }
 
+// isPodNetworkIsolated reports whether the spec opts out of the pod network.
+func isPodNetworkIsolated(spec *core.PodSpec) bool {
+	return spec.PodNetwork != nil && *spec.PodNetwork == core.PodNetworkIsolated
+}
+
+// validatePodNetwork validates spec.podNetwork: that the field may be set at
+// all, and its interactions with hostNetwork and the fields that need a pod IP.
+func validatePodNetwork(spec *core.PodSpec, specPath *field.Path, opts PodValidationOptions) field.ErrorList {
+	allErrs := field.ErrorList{}
+	if spec.PodNetwork == nil {
+		return allErrs
+	}
+	netPath := specPath.Child("podNetwork")
+
+	// "Isolated" is not dropped while the gate is disabled (see
+	// dropDisabledFields) because dropping it silently attaches a pod
+	// that asked for isolation to the pod network. Objects that already
+	// set podNetwork stay valid.
+	if !opts.AllowPodNetwork {
+		allErrs = append(allErrs, field.Forbidden(netPath, "the NetworkIsolatedPods feature gate is disabled"))
+	}
+
+	// The field describes the pod's own network namespace. A host network pod
+	// has none, so no value makes sense for it.
+	if spec.HostNetwork {
+		allErrs = append(allErrs, field.Forbidden(netPath, "may not be set when hostNetwork is true"))
+	}
+
+	if *spec.PodNetwork == core.PodNetworkIsolated {
+		allErrs = append(allErrs, validateIsolatedPodSpec(spec, specPath)...)
+	}
+	return allErrs
+}
+
+// validateIsolatedPodSpec ensures that a Pod that sets podNetwork to "Isolated"
+// does not request features that need to reach the pod from the node:
+// hostPort, and the httpGet, tcpSocket and grpc probes and lifecycle handlers.
+func validateIsolatedPodSpec(spec *core.PodSpec, specPath *field.Path) field.ErrorList {
+	allErrs := field.ErrorList{}
+	const forbiddenDetail = `may not be set when podNetwork is "Isolated"`
+
+	podshelper.VisitContainersWithPath(spec, specPath, func(c *core.Container, cFldPath *field.Path) bool {
+		// httpGet, tcpSocket and grpc probes are run by the kubelet from the
+		// node. Nothing in an isolated pod is reachable from there, whatever
+		// host the probe names. Only exec works.
+		checkProbe := func(probe *core.Probe, probePath *field.Path) {
+			if probe == nil {
+				return
+			}
+			if probe.HTTPGet != nil {
+				allErrs = append(allErrs, field.Forbidden(probePath.Child("httpGet"), forbiddenDetail))
+			}
+			if probe.TCPSocket != nil {
+				allErrs = append(allErrs, field.Forbidden(probePath.Child("tcpSocket"), forbiddenDetail))
+			}
+			if probe.GRPC != nil {
+				allErrs = append(allErrs, field.Forbidden(probePath.Child("grpc"), forbiddenDetail))
+			}
+		}
+		checkProbe(c.LivenessProbe, cFldPath.Child("livenessProbe"))
+		checkProbe(c.ReadinessProbe, cFldPath.Child("readinessProbe"))
+		checkProbe(c.StartupProbe, cFldPath.Child("startupProbe"))
+
+		if c.Lifecycle != nil {
+			checkHandler := func(h *core.LifecycleHandler, hPath *field.Path) {
+				if h == nil {
+					return
+				}
+				if h.HTTPGet != nil {
+					allErrs = append(allErrs, field.Forbidden(hPath.Child("httpGet"), forbiddenDetail))
+				}
+				if h.TCPSocket != nil {
+					allErrs = append(allErrs, field.Forbidden(hPath.Child("tcpSocket"), forbiddenDetail))
+				}
+			}
+			checkHandler(c.Lifecycle.PostStart, cFldPath.Child("lifecycle", "postStart"))
+			checkHandler(c.Lifecycle.PreStop, cFldPath.Child("lifecycle", "preStop"))
+		}
+
+		// hostPort does not work with podNetwork "Isolated": there is no pod IP to forward to.
+		portsPath := cFldPath.Child("ports")
+		for i, port := range c.Ports {
+			if port.HostPort > 0 {
+				allErrs = append(allErrs, field.Forbidden(portsPath.Index(i).Child("hostPort"), forbiddenDetail))
+			}
+		}
+		return true
+	})
+
+	return allErrs
+}
+
 // validateContainers is called by pod spec and template validation to validate the list of regular containers.
 func validateContainers(containers []core.Container, os *core.PodOS, volumes map[string]core.VolumeSource, podClaimNames sets.Set[string], gracePeriod *int64, fldPath *field.Path, opts PodValidationOptions, podRestartPolicy *core.RestartPolicy, hostUsers bool) field.ErrorList {
 	allErrs := field.ErrorList{}
@@ -4609,6 +4701,19 @@ func validatePodIPs(pod, oldPod *core.Pod) field.ErrorList {
 
 	podIPsField := field.NewPath("status", "podIPs")
 
+	// A pod that is not attached to the pod network never has pod IPs.
+	// Rejecting them here turns the guarantee into an API invariant and makes a
+	// kubelet that ignored the field (fail open) visible.
+	if isPodNetworkIsolated(&pod.Spec) {
+		if len(pod.Status.PodIP) > 0 {
+			allErrs = append(allErrs, field.Forbidden(field.NewPath("status", "podIP"), `must be unset when spec.podNetwork is "Isolated"`))
+		}
+		if len(pod.Status.PodIPs) > 0 {
+			allErrs = append(allErrs, field.Forbidden(podIPsField, `must be unset when spec.podNetwork is "Isolated"`))
+		}
+		return allErrs
+	}
+
 	// all new PodIPs must be valid IPs, but existing invalid ones can be kept.
 	var existingPodIPs []string
 	if oldPod != nil {
@@ -4748,6 +4853,7 @@ func ValidatePodSpec(spec *core.PodSpec, podMeta *metav1.ObjectMeta, fldPath *fi
 	allErrs = append(allErrs, validateWindowsHostProcessPod(spec, fldPath)...)
 	allErrs = append(allErrs, validateHostUsers(spec, fldPath, opts)...)
 	allErrs = append(allErrs, validatePodHostName(spec, fldPath)...)
+	allErrs = append(allErrs, validatePodNetwork(spec, fldPath, opts)...)
 	if len(spec.ServiceAccountName) > 0 {
 		for _, msg := range ValidateServiceAccountName(spec.ServiceAccountName, false) {
 			allErrs = append(allErrs, field.Invalid(fldPath.Child("serviceAccountName"), spec.ServiceAccountName, msg))
@@ -6209,7 +6315,7 @@ func ValidatePodStatusUpdate(newPod, oldPod *core.Pod, opts PodValidationOptions
 	allErrs = append(allErrs, ValidateEphemeralContainerStateTransition(newPod.Status.EphemeralContainerStatuses, oldPod.Status.EphemeralContainerStatuses, fldPath.Child("ephemeralContainerStatuses"))...)
 	allErrs = append(allErrs, validatePodResourceClaimStatuses(newPod.Status.ResourceClaimStatuses, newPod.Spec.ResourceClaims, fldPath.Child("resourceClaimStatuses"))...)
 	allErrs = append(allErrs, validatePodExtendedResourceClaimStatus(newPod.Status.ExtendedResourceClaimStatus, &newPod.Spec, fldPath.Child("extendedResourceClaimStatus"))...)
-	allErrs = append(allErrs, validateNodeAllocatableResourceClaimStatus(newPod.Status, &newPod.Spec, fldPath.Child("nodeAllocatableResourceClaimStatuses"))...)
+	allErrs = append(allErrs, validateExtraNodeAllocatableResources(newPod.Status, &newPod.Spec, fldPath.Child("extraNodeAllocatableResources"))...)
 
 	allErrs = append(allErrs, validatePodVolumeStatuses(newPod.Status.VolumeStatuses, &newPod.Spec, fldPath.Child("volumeStatuses"))...)
 
@@ -6301,94 +6407,87 @@ func validatePodResourceClaimStatuses(statuses []core.PodResourceClaimStatus, po
 	return allErrs
 }
 
-// validateNodeAllocatableResourceClaimStatus validates NodeAllocatableResourceClaimStatuses in a pod status
-func validateNodeAllocatableResourceClaimStatus(podStatus core.PodStatus, podSpec *core.PodSpec, fldPath *field.Path) field.ErrorList {
+// validateExtraNodeAllocatableResources validates ExtraNodeAllocatableResources in a pod status.
+// Declarative validation rejects entries with the same containerName, including a second pod
+// level entry.
+func validateExtraNodeAllocatableResources(podStatus core.PodStatus, podSpec *core.PodSpec, fldPath *field.Path) field.ErrorList {
 	allErrs := field.ErrorList{}
-
-	if len(podStatus.NodeAllocatableResourceClaimStatuses) == 0 {
+	entries := podStatus.ExtraNodeAllocatableResources
+	if len(entries) == 0 {
 		return allErrs
 	}
-
-	for i, nodeAllocatableStatus := range podStatus.NodeAllocatableResourceClaimStatuses {
-		statusFldPath := fldPath.Index(i)
-		if nodeAllocatableStatus.ResourceClaimName == "" {
-			continue
+	containerNames := sets.New[string]()
+	nonRestartableInitContainers := sets.New[string]()
+	for _, c := range podSpec.InitContainers {
+		containerNames.Insert(c.Name)
+		if c.RestartPolicy == nil || *c.RestartPolicy != core.ContainerRestartPolicyAlways {
+			nonRestartableInitContainers.Insert(c.Name)
 		}
+	}
+	for _, c := range podSpec.Containers {
+		containerNames.Insert(c.Name)
+	}
 
-		// First check the podSpec to see if the ResourceClaim is directly referenced.
-		// If not, check the podStatus to see if the ResourceClaim was generated from a template.
-		found := false
-		for _, claimRef := range podSpec.ResourceClaims {
-			if (claimRef.ResourceClaimName != nil) && (*claimRef.ResourceClaimName == nodeAllocatableStatus.ResourceClaimName) {
-				found = true
-				break
+	containerRequests := core.ResourceList{}
+	podEntryIndex := -1
+	for i, res := range entries {
+		idxPath := fldPath.Index(i)
+		allErrs = append(allErrs, validateExtraNodeAllocatableResourceList(res.Requests, idxPath.Child("requests"))...)
+		allErrs = append(allErrs, validateExtraNodeAllocatableResourceList(res.Limits, idxPath.Child("limits"))...)
+		for name, request := range res.Requests {
+			if limit := res.Limits[name]; request.Cmp(limit) > 0 {
+				allErrs = append(allErrs, field.Invalid(idxPath.Child("requests").Key(string(name)), request.String(), fmt.Sprintf("must be less than or equal to %s limit of %s", name, limit.String())))
 			}
 		}
-		if !found {
-			for _, claimRef := range podStatus.ResourceClaimStatuses {
-				if (claimRef.ResourceClaimName != nil) && (*claimRef.ResourceClaimName == nodeAllocatableStatus.ResourceClaimName) {
-					found = true
-					break
+		switch {
+		case res.ContainerName == "":
+			podEntryIndex = i
+		case containerNames.Has(res.ContainerName):
+			// The pod level entry does not have to cover non restartable init container entries, because the regular containers may already cover them.
+			if !nonRestartableInitContainers.Has(res.ContainerName) {
+				for name, request := range res.Requests {
+					sum := containerRequests[name]
+					sum.Add(request)
+					containerRequests[name] = sum
 				}
 			}
+		default:
+			allErrs = append(allErrs, field.Invalid(idxPath.Child("containerName"), res.ContainerName, "must be empty or match the name of an entry in `spec.initContainers` or `spec.containers`"))
 		}
-		// Extended resources backed by DRA are satisfied by a scheduler-created
-		// ResourceClaim that is not referenced in podSpec.ResourceClaims nor in
-		// podStatus.ResourceClaimStatuses. Its name is recorded in
-		// podStatus.ExtendedResourceClaimStatus instead.
-		if !found && podStatus.ExtendedResourceClaimStatus != nil &&
-			podStatus.ExtendedResourceClaimStatus.ResourceClaimName == nodeAllocatableStatus.ResourceClaimName {
-			found = true
-		}
+	}
+	if podEntryIndex < 0 {
+		return append(allErrs, field.Required(fldPath, "must have an entry with an empty containerName"))
+	}
+	podEntry := entries[podEntryIndex]
 
-		if !found {
-			allErrs = append(allErrs, field.Invalid(statusFldPath.Child("resourceClaimName"), nodeAllocatableStatus.ResourceClaimName, "no mapping found in pod reference"))
+	for i, res := range entries {
+		if res.ContainerName == "" || nonRestartableInitContainers.Has(res.ContainerName) {
+			continue
 		}
-
-		if len(nodeAllocatableStatus.Mapping) > 0 {
-			allErrs = append(allErrs, validateNodeAllocatableMappedResources(nodeAllocatableStatus.Mapping, statusFldPath.Child("mapping"))...)
-		}
-		if len(nodeAllocatableStatus.Overhead) > 0 {
-			allErrs = append(allErrs, validateNodeAllocatableOverheadResources(nodeAllocatableStatus.Overhead, statusFldPath.Child("overhead"))...)
+		for name, limit := range res.Limits {
+			if podLimit, exists := podEntry.Limits[name]; exists && limit.Cmp(podLimit) > 0 {
+				allErrs = append(allErrs, field.Invalid(fldPath.Index(i).Child("limits").Key(string(name)), limit.String(), fmt.Sprintf("must be less than or equal to the limit of the entry with an empty containerName (%s)", podLimit.String())))
+			}
 		}
 	}
 
-	return allErrs
-}
-
-// validateNodeAllocatableMappedResources validates a list of mapped node allocatable resources
-func validateNodeAllocatableMappedResources(mapping []core.NodeAllocatableMappedResources, fldPath *field.Path) field.ErrorList {
-	allErrs := field.ErrorList{}
-	for i, item := range mapping {
-		itemPath := fldPath.Index(i)
-		if !helper.IsNodeAllocatableResourceName(item.Name) {
-			allErrs = append(allErrs, field.Invalid(itemPath.Child("name"), item.Name, "must be a node allocatable resource name"))
-		}
-		if item.Quantity != nil && item.Quantity.Cmp(resource.Quantity{}) < 0 {
-			allErrs = append(allErrs, field.Invalid(itemPath.Child("quantity"), item.Quantity.String(), "must be non-negative"))
+	for name, sum := range containerRequests {
+		if podRequest := podEntry.Requests[name]; sum.Cmp(podRequest) > 0 {
+			allErrs = append(allErrs, field.Invalid(fldPath.Index(podEntryIndex).Child("requests").Key(string(name)), podRequest.String(), fmt.Sprintf("must be greater than or equal to the aggregate requests of the container entries (%s)", sum.String())))
 		}
 	}
 	return allErrs
 }
 
-// validateNodeAllocatableOverheadResources validates a list of overhead node allocatable resources
-func validateNodeAllocatableOverheadResources(overhead []core.NodeAllocatableOverheadResources, fldPath *field.Path) field.ErrorList {
+// validateExtraNodeAllocatableResourceList validates the requests or limits of an ExtraNodeAllocatableResource.
+func validateExtraNodeAllocatableResourceList(resources core.ResourceList, fldPath *field.Path) field.ErrorList {
 	allErrs := field.ErrorList{}
-	for i, item := range overhead {
-		itemPath := fldPath.Index(i)
-		if !helper.IsNodeAllocatableResourceName(item.Name) {
-			allErrs = append(allErrs, field.Invalid(itemPath.Child("name"), item.Name, "must be a node allocatable resource name"))
+	for name, quantity := range resources {
+		keyPath := fldPath.Key(string(name))
+		if !helper.IsNodeAllocatableResourceName(name) {
+			allErrs = append(allErrs, field.Invalid(keyPath, name, "must be a node allocatable resource name"))
 		}
-		if item.PerPod == nil && item.PerContainer == nil {
-			allErrs = append(allErrs, field.Invalid(itemPath, "", "at least one of perPod or perContainer must be set"))
-		} else {
-			if item.PerPod != nil && item.PerPod.Cmp(resource.Quantity{}) < 0 {
-				allErrs = append(allErrs, field.Invalid(itemPath.Child("perPod"), item.PerPod.String(), "must be non-negative"))
-			}
-			if item.PerContainer != nil && item.PerContainer.Cmp(resource.Quantity{}) < 0 {
-				allErrs = append(allErrs, field.Invalid(itemPath.Child("perContainer"), item.PerContainer.String(), "must be non-negative"))
-			}
-		}
+		allErrs = append(allErrs, ValidateNonnegativeQuantity(quantity, keyPath)...)
 	}
 	return allErrs
 }
@@ -6939,7 +7038,7 @@ func validatePodLevelResourcesResize(newPod, oldPod *core.Pod, specPath *field.P
 		allErrs = append(allErrs, errs)
 	}
 
-	if utilfeature.DefaultFeatureGate.Enabled(features.DRANodeAllocatableResources) && len(newPod.Status.NodeAllocatableResourceClaimStatuses) > 0 {
+	if utilfeature.DefaultFeatureGate.Enabled(features.DRANodeAllocatableResources) && len(newPod.Status.ExtraNodeAllocatableResources) > 0 {
 		v1Pod := &v1.Pod{}
 		if err := corev1.Convert_core_Pod_To_v1_Pod(newPod, v1Pod, nil); err != nil {
 			allErrs = append(allErrs, field.InternalError(specPath, fmt.Errorf("failed to convert pod for DRA validation: %w", err)))
@@ -7024,8 +7123,8 @@ func validatePodLevelResourcesCoverDRA(pod *v1.Pod) (bool, string) {
 
 	if pod.Spec.Resources.Requests != nil {
 		opts := resourcehelper.PodResourcesOptions{
-			SkipPodLevelResources:                    true,
-			UseDRANodeAllocatableResourceClaimStatus: true,
+			SkipPodLevelResources:            true,
+			UseExtraNodeAllocatableResources: true,
 		}
 		requestWithoutPodLevel := resourcehelper.AggregateContainerRequests(pod, opts)
 
@@ -7045,8 +7144,8 @@ func validatePodLevelResourcesCoverDRA(pod *v1.Pod) (bool, string) {
 
 	if pod.Spec.Resources.Limits != nil {
 		opts := resourcehelper.PodResourcesOptions{
-			SkipPodLevelResources:                    true,
-			UseDRANodeAllocatableResourceClaimStatus: true,
+			SkipPodLevelResources:            true,
+			UseExtraNodeAllocatableResources: true,
 		}
 		limitsWithoutPodLevel := resourcehelper.AggregateContainerLimits(pod, opts)
 
@@ -7067,10 +7166,10 @@ func validatePodLevelResourcesCoverDRA(pod *v1.Pod) (bool, string) {
 			}
 		}
 
-		// Individual Container limits + DRA overheads must be <= Pod-level limits.
-		containerDRAAllocations := make(map[string]v1.ResourceList, len(pod.Spec.Containers))
+		// Individual container limits + extra node allocatable resources (like DRA allocations) must be <= pod-level limits.
+		containerExtraNodeAllocatableLimits := make(map[string]v1.ResourceList, len(pod.Spec.Containers))
 		for _, ctr := range pod.Spec.Containers {
-			containerDRAAllocations[ctr.Name] = resourcehelper.GetContainerDRAAllocations(pod, ctr.Name)
+			containerExtraNodeAllocatableLimits[ctr.Name] = resourcehelper.GetExtraNodeAllocatableResourcesLimits(pod, ctr.Name)
 		}
 
 		for _, ctr := range pod.Spec.Containers {
@@ -7085,9 +7184,9 @@ func validatePodLevelResourcesCoverDRA(pod *v1.Pod) (bool, string) {
 					continue
 				}
 
-				draResAllocation := containerDRAAllocations[ctr.Name][resourceName]
+				extraNodeAllocatableLimit := containerExtraNodeAllocatableLimits[ctr.Name][resourceName]
 				effectiveLimit := ctrLimit.DeepCopy()
-				effectiveLimit.Add(draResAllocation)
+				effectiveLimit.Add(extraNodeAllocatableLimit)
 
 				if effectiveLimit.Cmp(podLevelResLimit) > 0 {
 					return false, fmt.Sprintf("pod level limit for %s is insufficient to cover the limit and DRA overhead for container %s", resourceName, ctr.Name)

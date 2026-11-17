@@ -118,6 +118,9 @@ func (podStrategy) PrepareForUpdate(ctx context.Context, obj, old runtime.Object
 	}
 
 	podutil.DropDisabledPodFields(newPod, oldPod)
+	// The field is immutable on Pods; this only lets clients that do not know
+	// it send full updates of pods that set it.
+	podutil.SyncPodNetworkOnUpdate(&newPod.Spec, &oldPod.Spec)
 	updatePodGeneration(newPod, oldPod)
 }
 
@@ -249,8 +252,8 @@ func (podStatusStrategy) PrepareForUpdate(ctx context.Context, obj, old runtime.
 	if newPod.Status.ExtendedResourceClaimStatus == nil && oldPod.Status.ExtendedResourceClaimStatus != nil {
 		newPod.Status.ExtendedResourceClaimStatus = oldPod.Status.ExtendedResourceClaimStatus
 	}
-	if newPod.Status.NodeAllocatableResourceClaimStatuses == nil && oldPod.Status.NodeAllocatableResourceClaimStatuses != nil {
-		newPod.Status.NodeAllocatableResourceClaimStatuses = oldPod.Status.NodeAllocatableResourceClaimStatuses
+	if newPod.Status.ExtraNodeAllocatableResources == nil && oldPod.Status.ExtraNodeAllocatableResources != nil {
+		newPod.Status.ExtraNodeAllocatableResources = oldPod.Status.ExtraNodeAllocatableResources
 	}
 
 	preserveOldObservedGeneration(newPod, oldPod)
@@ -515,6 +518,7 @@ func (podDynamicStrategy) PrepareForUpdate(ctx context.Context, obj, old runtime
 	}
 
 	podutil.DropDisabledPodFields(newPod, oldPod)
+	podutil.SyncPodNetworkOnUpdate(&newPod.Spec, &oldPod.Spec)
 	updatePodGeneration(newPod, oldPod)
 }
 

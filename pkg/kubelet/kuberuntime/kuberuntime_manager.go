@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
@@ -45,6 +46,7 @@ import (
 	ref "k8s.io/client-go/tools/reference"
 	"k8s.io/client-go/util/flowcontrol"
 	"k8s.io/component-base/logs/logreduction"
+	resourcehelper "k8s.io/component-helpers/resource"
 	internalapi "k8s.io/cri-api/pkg/apis"
 	runtimeapi "k8s.io/cri-api/pkg/apis/runtime/v1"
 	crierror "k8s.io/cri-api/pkg/errors"
@@ -201,6 +203,9 @@ type kubeGenericRuntimeManager struct {
 	// Root directory used to store pod logs
 	podLogsDirectory string
 
+	// nodeIPs are the IP addresses of the node.
+	nodeIPs []net.IP
+
 	// Swap controller availability check function (Linux only)
 	// Uses sync.OnceValue for lazy initialization
 	getSwapControllerAvailable func() bool
@@ -259,6 +264,7 @@ func NewKubeGenericRuntimeManager(
 	getServiceAccount plugin.GetServiceAccountFunc,
 	podInitContainerTimeRecorder PodInitContainerTimeRecorder,
 	actuatedState state.State,
+	nodeIPs []net.IP,
 ) (KubeGenericRuntime, []images.PostImageGCHook, error) {
 	logger := klog.FromContext(ctx)
 
@@ -289,6 +295,7 @@ func NewKubeGenericRuntimeManager(
 		memoryThrottlingFactor:       memoryThrottlingFactor,
 		memoryReservationPolicy:      memoryReservationPolicy,
 		podLogsDirectory:             podLogsDirectory,
+		nodeIPs:                      nodeIPs,
 		podInitContainerTimeRecorder: podInitContainerTimeRecorder,
 	}
 
@@ -1255,6 +1262,16 @@ func (m *kubeGenericRuntimeManager) validatePodResizeAction(
 	return nil
 }
 
+// extraNodeAllocatableMemoryLimit returns the memory that getMemoryLimit adds to the container's
+// memory limit for its extra node allocatable resources.
+func extraNodeAllocatableMemoryLimit(pod *v1.Pod, container *v1.Container) int64 {
+	if !utilfeature.DefaultFeatureGate.Enabled(features.DRANodeAllocatableResources) || container.Resources.Limits.Memory().IsZero() {
+		return 0
+	}
+	limits := resourcehelper.GetExtraNodeAllocatableResourcesLimits(pod, container.Name)
+	return limits.Memory().Value()
+}
+
 func (m *kubeGenericRuntimeManager) validateMemoryResizeAction(
 	ctx context.Context,
 	pod *v1.Pod,
@@ -1272,7 +1289,7 @@ func (m *kubeGenericRuntimeManager) validateMemoryResizeAction(
 		if cUpdate.desiredContainerResources.memoryLimit != 0 {
 			if cUpdate.currentContainerResources == nil || cUpdate.currentContainerResources.memoryLimit == 0 || // Limit added
 				cUpdate.desiredContainerResources.memoryLimit < cUpdate.currentContainerResources.memoryLimit { // Limit decreasing
-				decreasingContainerLimits[cUpdate.container.Name] = cUpdate.desiredContainerResources.memoryLimit
+				decreasingContainerLimits[cUpdate.container.Name] = cUpdate.desiredContainerResources.memoryLimit + extraNodeAllocatableMemoryLimit(pod, cUpdate.container)
 			}
 		}
 	}
@@ -2045,6 +2062,26 @@ func (m *kubeGenericRuntimeManager) SyncPod(ctx context.Context, pod *v1.Pod, po
 			// Overwrite the podIPs passed in the pod status, since we just started the pod sandbox.
 			podIPs = m.determinePodSandboxIPs(ctx, pod.Namespace, pod.Name, resp.GetStatus())
 			logger.V(4).Info("Determined the ip for pod after sandbox changed", "IPs", podIPs, "pod", klog.KObj(pod))
+		}
+
+		// A runtime that reported the pod_network_isolated capability but
+		// attached the sandbox to the pod network anyway must not get any
+		// container started in it: the pod asked for isolation. Stop the
+		// sandbox and fail; the API server also rejects a status with IPs.
+		if kubecontainer.IsNetworkIsolatedPod(pod) && len(podIPs) > 0 {
+			msg := fmt.Sprintf("runtime attached the sandbox of a pod with podNetwork %q to the pod network (IPs %v)", v1.PodNetworkIsolated, podIPs)
+			if err := m.runtimeService.StopPodSandbox(ctx, podSandboxID); err != nil && !crierror.IsNotFound(err) {
+				logger.Error(err, "Failed to stop sandbox with unexpected IPs", "pod", klog.KObj(pod), "podSandboxID", podSandboxID)
+			}
+			metrics.StartedPodsErrorsTotal.Inc()
+			createSandboxResult.Fail(kubecontainer.ErrCreatePodSandbox, msg)
+			logger.Error(nil, "CreatePodSandbox for pod produced a sandbox with IPs for a network isolated pod", "pod", klog.KObj(pod), "podSandboxID", podSandboxID, "IPs", podIPs)
+			ref, referr := ref.GetReference(legacyscheme.Scheme, pod)
+			if referr != nil {
+				logger.Error(referr, "Couldn't make a ref to pod", "pod", klog.KObj(pod))
+			}
+			m.recorder.WithLogger(logger).Eventf(ref, v1.EventTypeWarning, events.FailedCreatePodSandBox, "Failed to create pod sandbox: %s", msg)
+			return
 		}
 
 		// Step 5: invoke the sandbox ready callback before image pulling .
