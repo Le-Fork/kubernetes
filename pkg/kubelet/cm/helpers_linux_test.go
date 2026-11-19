@@ -28,6 +28,7 @@ import (
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/util/version"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	featuregatetesting "k8s.io/component-base/featuregate/testing"
 	"k8s.io/klog/v2/ktesting"
@@ -37,27 +38,6 @@ import (
 	kubetypes "k8s.io/kubernetes/pkg/kubelet/types"
 	"k8s.io/utils/ptr"
 )
-
-// getResourceList returns a ResourceList with the
-// specified cpu and memory resource values
-func getResourceList(cpu, memory string) v1.ResourceList {
-	res := v1.ResourceList{}
-	if cpu != "" {
-		res[v1.ResourceCPU] = resource.MustParse(cpu)
-	}
-	if memory != "" {
-		res[v1.ResourceMemory] = resource.MustParse(memory)
-	}
-	return res
-}
-
-// getResourceRequirements returns a ResourceRequirements object
-func getResourceRequirements(requests, limits v1.ResourceList) v1.ResourceRequirements {
-	res := v1.ResourceRequirements{}
-	res.Requests = requests
-	res.Limits = limits
-	return res
-}
 
 func TestResourceConfigForPod(t *testing.T) {
 	const Mi = int64(1024 * 1024)
@@ -989,6 +969,9 @@ func TestResourceConfigForPod(t *testing.T) {
 
 	for _, testCase := range testCases {
 		t.Run(testCase.description, func(t *testing.T) {
+			if !testCase.podLevelResourcesEnabled {
+				featuregatetesting.SetFeatureGateEmulationVersionDuringTest(t, utilfeature.DefaultFeatureGate, version.MustParse("1.37"))
+			}
 			featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, pkgfeatures.PodLevelResources, testCase.podLevelResourcesEnabled)
 			featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, pkgfeatures.DRANodeAllocatableResources, testCase.draNodeAllocatableResourcesEnabled)
 			actual := ResourceConfigForPod(testCase.pod, testCase.enforceCPULimits, testCase.quotaPeriod, false, kubeletconfig.NoneMemoryReservationPolicy)
@@ -1746,6 +1729,9 @@ func TestIsPodEligibleForSwap(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			if tc.plrEnabled != nil {
+				if !*tc.plrEnabled {
+					featuregatetesting.SetFeatureGateEmulationVersionDuringTest(t, utilfeature.DefaultFeatureGate, version.MustParse("1.37"))
+				}
 				featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, pkgfeatures.PodLevelResources, *tc.plrEnabled)
 			}
 			elig, req := IsPodEligibleForSwap(tc.pod)
@@ -2101,6 +2087,9 @@ func TestApplyPodLevelSwapConfig(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			if !tc.plrEnabled {
+				featuregatetesting.SetFeatureGateEmulationVersionDuringTest(t, utilfeature.DefaultFeatureGate, version.MustParse("1.37"))
+			}
 			featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, pkgfeatures.PodLevelResources, tc.plrEnabled)
 			rc := &ResourceConfig{Unified: tc.initialUnified}
 			ApplyPodLevelSwapConfig(logger, tc.pod, rc, tc.swapBehavior, tc.nodeTotalMemory, tc.totalPodsSwapAvailable, tc.isCgroup2, tc.swapControllerAvailable)
@@ -2318,6 +2307,9 @@ func TestIsContainerEligibleForSwap(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			if !tc.plrEnabled {
+				featuregatetesting.SetFeatureGateEmulationVersionDuringTest(t, utilfeature.DefaultFeatureGate, version.MustParse("1.37"))
+			}
 			featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, pkgfeatures.PodLevelResources, tc.plrEnabled)
 			if got := IsContainerEligibleForSwap(tc.pod, tc.container); got != tc.expected {
 				t.Fatalf("IsContainerEligibleForSwap() = %t, want %t", got, tc.expected)
